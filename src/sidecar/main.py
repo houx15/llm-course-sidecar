@@ -447,7 +447,8 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
                 return
 
             # Send start event
-            yield f"data: {{'type': 'start'}}\n\n"
+            import json
+            yield f"data: {json.dumps({'type': 'start'}, ensure_ascii=False)}\n\n"
 
             # Process turn with streaming
             async for event in orchestrator.process_turn_stream(session_id, request.message):
@@ -457,7 +458,8 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
 
             # Send complete event
             state = orchestrator.storage.load_state(session_id)
-            yield f"data: {{'type': 'complete', 'turn_index': {state.turn_index}}}\n\n"
+            import json
+            yield f"data: {json.dumps({'type': 'complete', 'turn_index': state.turn_index}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
