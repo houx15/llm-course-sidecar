@@ -148,3 +148,29 @@ def test_resolve_curriculum_dir_uses_chapter_bundle_overlay(monkeypatch, tmp_pat
     assert (target_chapter / "chapter_context.md").exists()
     assert (target_chapter / "interaction_protocol.md").exists()
     assert (resolved / "_templates" / "dynamic_report_template.md").exists()
+
+
+def test_run_user_code_endpoint(monkeypatch):
+    fake_orchestrator = FakeOrchestrator(storage=FakeStorage(exists=True))
+    monkeypatch.setattr(sidecar_main, "_get_orchestrator", lambda _sid: fake_orchestrator)
+    monkeypatch.setattr(
+        sidecar_main.user_code_runner,
+        "run_python",
+        lambda session_id, code, timeout_seconds: {
+            "success": True,
+            "stdout": "ok",
+            "stderr": "",
+            "returncode": 0,
+            "execution_time_ms": 10,
+        },
+    )
+
+    with TestClient(sidecar_main.app) as client:
+        response = client.post(
+            "/api/session/sess-1/code/run",
+            json={"code": "print('ok')", "timeout_seconds": 5},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert response.json()["stdout"] == "ok"

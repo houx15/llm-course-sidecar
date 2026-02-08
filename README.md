@@ -32,6 +32,7 @@ Phase 1 bootstrap is started:
 - runtime path resolution supports desktop chapter bundle paths
 - yellow-page lookup supports runtime env/bundle paths (not only demo local `.metadata`)
 - core prompt/expert path defaults are now sidecar-repo aligned (no `app/server/*` dependency)
+- initial user-code execution API added: `POST /api/session/{session_id}/code/run`
 
 ## Run (Dev)
 

@@ -14,6 +14,7 @@ from typing import List, Optional, Dict, Any
 
 from .services.orchestrator import Orchestrator, OrchestratorError
 from .services.storage import Storage
+from .services.user_code_runner import UserCodeRunner
 from .config import settings
 
 # Configure logging
@@ -205,6 +206,7 @@ default_orchestrator = _build_orchestrator(
     main_agents_dir=default_main_agents_dir,
 )
 session_orchestrators: dict[str, Orchestrator] = {}
+user_code_runner = UserCodeRunner(sessions_root=sessions_root)
 
 
 def _get_orchestrator(session_id: str) -> Orchestrator:
@@ -331,6 +333,21 @@ class DeleteFileResponse(BaseModel):
     """Response for file deletion."""
     success: bool
     message: str
+
+
+class RunCodeRequest(BaseModel):
+    """Request to run user Python code in the session workspace."""
+    code: str = Field(..., min_length=1, max_length=20000)
+    timeout_seconds: int = Field(default=20, ge=1, le=120)
+
+
+class RunCodeResponse(BaseModel):
+    """Response for user code execution."""
+    success: bool
+    stdout: str
+    stderr: str
+    returncode: int
+    execution_time_ms: int
 
 
 # API Endpoints
@@ -937,6 +954,26 @@ async def delete_file(session_id: str, filename: str):
     except Exception as e:
         logger.error(f"Failed to delete file: {e}")
         raise HTTPException(status_code=500, detail="删除文件失败")
+
+
+@app.post("/api/session/{session_id}/code/run", response_model=RunCodeResponse)
+async def run_user_code(session_id: str, request: RunCodeRequest):
+    """
+    Execute user Python code in a per-session workspace.
+
+    This is the initial user-code runtime API and is intentionally simple:
+    subprocess execution with timeout, output capture, and output size clipping.
+    """
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    result = user_code_runner.run_python(
+        session_id=session_id,
+        code=request.code,
+        timeout_seconds=request.timeout_seconds,
+    )
+    return RunCodeResponse(**result)
 
 
 # Serve static files (frontend)

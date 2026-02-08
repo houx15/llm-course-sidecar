@@ -201,6 +201,7 @@ Deliverables:
 - expert/user execution lanes implemented
 - timeout/resource limits + cancellation
 - stable error taxonomy
+- initial user code execution endpoint scaffolded (`/api/session/{session_id}/code/run`)
 
 Exit criteria:
 - deterministic failure handling for code tasks
