@@ -176,8 +176,12 @@ Manifest minimum:
 - [x] Session API parity endpoints available (including file APIs and `dynamic_report`)
 - [x] `create_session` supports optional `desktop_context`
 - [x] Initial bundle-path runtime resolver implemented (chapter bundle -> curriculum overlay)
+- [x] Added API parity test scaffold (`tests/test_api_parity.py`) for session endpoints and streaming event shape
+- [x] Removed key demo-local assumptions in core services (yellow-page path resolution, sidecar prompt dir defaults, session path resolution)
 - [ ] Replace remaining demo-local path assumptions (`.metadata`, legacy fallbacks) with bundle-aware resolvers
-- [ ] Add test cases for desktop bundle path loading and API parity
+- [~] Expand tests to cover real bundle fixture loading (chapter files + global prompt fallback)
+  - done: chapter bundle overlay fixture test
+  - pending: global prompt fallback fixture coverage
 
 ## Phase 1 - Contract Freeze and Extraction
 

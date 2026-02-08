@@ -31,6 +31,7 @@ Phase 1 bootstrap is started:
 - `create_session` now accepts optional `desktop_context`
 - runtime path resolution supports desktop chapter bundle paths
 - yellow-page lookup supports runtime env/bundle paths (not only demo local `.metadata`)
+- core prompt/expert path defaults are now sidecar-repo aligned (no `app/server/*` dependency)
 
 ## Run (Dev)
 
@@ -49,6 +50,15 @@ Optional runtime path env vars:
 - `CURRICULUM_DIR`
 - `EXPERTS_DIR`
 - `MAIN_AGENTS_DIR`
+- `EXPERT_YELLOW_PAGE_PATH`
+- `SIDECAR_SERVICES_DIR`
+
+## Tests
+
+1. Install dev dependencies:
+   - `pip install -e .[dev]`
+2. Run API parity tests:
+   - `pytest -q tests/test_api_parity.py`
 
 ## Relationship to Other Repos
 

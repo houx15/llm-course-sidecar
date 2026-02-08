@@ -8,11 +8,12 @@ This module is responsible for:
 
 import json
 import re
+import os
 from pathlib import Path
 from typing import List, Dict, Optional
 import logging
 
-from app.server.models.schemas import ExpertMetadata, YellowPage
+from ..models.schemas import ExpertMetadata, YellowPage
 
 logger = logging.getLogger(__name__)
 
@@ -137,10 +138,13 @@ def generate_yellow_page(experts_root: Path, output_path: Optional[Path] = None)
 
     # Determine output path
     if output_path is None:
-        # v3.0.1: Use .metadata/experts/ instead of experts/yellow_pages/
-        metadata_dir = Path(".metadata/experts")
-        metadata_dir.mkdir(parents=True, exist_ok=True)
-        output_path = metadata_dir / "yellow_page.generated.json"
+        env_path = os.getenv("EXPERT_YELLOW_PAGE_PATH", "").strip()
+        if env_path:
+            output_path = Path(env_path)
+        else:
+            metadata_dir = experts_root.parent / ".metadata" / "experts"
+            metadata_dir.mkdir(parents=True, exist_ok=True)
+            output_path = metadata_dir / "yellow_page.generated.json"
 
     # Write to file
     try:

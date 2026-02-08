@@ -29,14 +29,17 @@ logger = logging.getLogger(__name__)
 class AgentRunner:
     """Runner for executing agents with prompt injection and validation."""
 
-    def __init__(self, agents_dir: str = "app/server/agents"):
+    def __init__(self, agents_dir: Optional[str] = None):
         """
         Initialize agent runner.
 
         Args:
             agents_dir: Directory containing agent prompt files
         """
-        self.agents_dir = Path(agents_dir)
+        if agents_dir:
+            self.agents_dir = Path(agents_dir)
+        else:
+            self.agents_dir = Path(__file__).resolve().parents[1] / "agents"
         self.llm_client = get_llm_client()
 
     def _load_prompt_template(self, agent_name: str) -> str:

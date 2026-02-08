@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import yaml
 from datetime import datetime
 from pathlib import Path
@@ -53,11 +54,12 @@ class ConsultationEngine:
         """
         self.experts_root = experts_root
         self.curriculum_root = curriculum_root
+        self.sessions_root = Path(os.getenv("SESSIONS_DIR", "sessions"))
         self.expert_runner = ExpertRunner(experts_root)
 
-        # Load yellow page (v3.0.1: from .metadata/experts/)
-        yellow_page_path = Path(".metadata/experts/yellow_page.generated.json")
-        self.yellow_page = load_yellow_page(yellow_page_path)
+        # Load yellow page with runtime-aware path resolution.
+        yellow_page_path = self._resolve_yellow_page_path()
+        self.yellow_page = load_yellow_page(yellow_page_path) if yellow_page_path else None
         if not self.yellow_page:
             raise ConsultationEngineError("Failed to load yellow page")
 
@@ -68,7 +70,7 @@ class ConsultationEngine:
         """Get next consultation ID for a session."""
         if session_id not in self._consultation_counters:
             # Check existing consultations in session
-            session_dir = Path("sessions") / session_id / "expert_workspace" / "consultations"
+            session_dir = self.sessions_root / session_id / "expert_workspace" / "consultations"
             if session_dir.exists():
                 existing = list(session_dir.glob("consult_*"))
                 self._consultation_counters[session_id] = len(existing)
@@ -77,6 +79,27 @@ class ConsultationEngine:
 
         self._consultation_counters[session_id] += 1
         return f"consult_{self._consultation_counters[session_id]:04d}"
+
+    def _resolve_yellow_page_path(self) -> Optional[Path]:
+        """Resolve yellow page path with env/bundle-friendly fallbacks."""
+        env_path = os.getenv("EXPERT_YELLOW_PAGE_PATH", "").strip()
+        candidates = []
+        if env_path:
+            candidates.append(Path(env_path))
+
+        candidates.extend(
+            [
+                self.experts_root / "yellow_page.generated.json",
+                self.experts_root / ".metadata" / "experts" / "yellow_page.generated.json",
+                self.experts_root.parent / "yellow_page.generated.json",
+                self.experts_root.parent / ".metadata" / "experts" / "yellow_page.generated.json",
+                Path(".metadata/experts/yellow_page.generated.json"),
+            ]
+        )
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
 
     def _load_consultation_guide(self, chapter_id: str) -> Optional[ConsultationGuide]:
         """
