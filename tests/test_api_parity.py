@@ -174,3 +174,32 @@ def test_run_user_code_endpoint(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert response.json()["stdout"] == "ok"
+
+
+def test_notebook_cell_and_reset_endpoints(monkeypatch):
+    fake_orchestrator = FakeOrchestrator(storage=FakeStorage(exists=True))
+    monkeypatch.setattr(sidecar_main, "_get_orchestrator", lambda _sid: fake_orchestrator)
+    monkeypatch.setattr(
+        sidecar_main.notebook_manager,
+        "execute_cell",
+        lambda session_id, code: {
+            "success": True,
+            "stdout": "",
+            "stderr": "",
+            "result_repr": "3",
+            "execution_time_ms": 5,
+        },
+    )
+    monkeypatch.setattr(sidecar_main.notebook_manager, "reset_session", lambda session_id: None)
+
+    with TestClient(sidecar_main.app) as client:
+        run_resp = client.post(
+            "/api/session/sess-1/notebook/cell/run",
+            json={"code": "1+2", "cell_id": "c1"},
+        )
+        reset_resp = client.post("/api/session/sess-1/notebook/reset")
+
+    assert run_resp.status_code == 200
+    assert run_resp.json()["result_repr"] == "3"
+    assert reset_resp.status_code == 200
+    assert reset_resp.json() == {"success": True}

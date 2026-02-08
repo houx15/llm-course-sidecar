@@ -213,6 +213,9 @@ Deliverables:
 - notebook execution service (kernel lifecycle)
 - per-session workspace binding
 - restart/reset kernel APIs
+- initial in-process stateful notebook scaffolded with:
+  - `POST /api/session/{session_id}/notebook/cell/run`
+  - `POST /api/session/{session_id}/notebook/reset`
 
 Exit criteria:
 - run notebook cells in sequence with state continuity

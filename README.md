@@ -33,6 +33,9 @@ Phase 1 bootstrap is started:
 - yellow-page lookup supports runtime env/bundle paths (not only demo local `.metadata`)
 - core prompt/expert path defaults are now sidecar-repo aligned (no `app/server/*` dependency)
 - initial user-code execution API added: `POST /api/session/{session_id}/code/run`
+- initial notebook APIs added:
+  - `POST /api/session/{session_id}/notebook/cell/run`
+  - `POST /api/session/{session_id}/notebook/reset`
 
 ## Run (Dev)
 
