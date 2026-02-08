@@ -15,6 +15,7 @@ from typing import List, Optional, Dict, Any
 from .services.orchestrator import Orchestrator, OrchestratorError
 from .services.storage import Storage
 from .services.user_code_runner import UserCodeRunner
+from .services.code_execution_manager import CodeExecutionManager
 from .services.notebook_manager import NotebookManager
 from .config import settings
 
@@ -141,12 +142,13 @@ def _find_chapter_dir_in_bundle(bundle_root: Path, course_id: str, chapter_name:
 
 def _ensure_overlay_templates(curriculum_root: Path) -> None:
     fallback_templates = []
+    template_root_env = os.getenv("CURRICULUM_TEMPLATES_DIR", "").strip()
+    if template_root_env and _exists(Path(template_root_env)):
+        fallback_templates.append(Path(template_root_env))
     if _exists(default_curriculum_dir / "_templates"):
         fallback_templates.append(default_curriculum_dir / "_templates")
     if _exists(default_curriculum_dir / "templates"):
         fallback_templates.append(default_curriculum_dir / "templates")
-    if _exists(project_root / "demo" / "curriculum" / "_templates"):
-        fallback_templates.append(project_root / "demo" / "curriculum" / "_templates")
 
     for source in fallback_templates:
         target = curriculum_root / source.name
@@ -208,11 +210,31 @@ default_orchestrator = _build_orchestrator(
 )
 session_orchestrators: dict[str, Orchestrator] = {}
 user_code_runner = UserCodeRunner(sessions_root=sessions_root)
+code_execution_manager = CodeExecutionManager(runner=user_code_runner)
 notebook_manager = NotebookManager()
 
 
 def _get_orchestrator(session_id: str) -> Orchestrator:
     return session_orchestrators.get(session_id, default_orchestrator)
+
+
+def _build_code_job_summary(job: Any) -> "CodeJobSummary":
+    return CodeJobSummary(
+        job_id=job.job_id,
+        session_id=job.session_id,
+        status=job.status,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        ended_at=job.ended_at,
+    )
+
+
+def _build_code_job_detail(job: Any) -> "CodeJobDetailResponse":
+    result = RunCodeResponse(**job.result) if job.result else None
+    return CodeJobDetailResponse(
+        **_build_code_job_summary(job).model_dump(),
+        result=result,
+    )
 
 
 # Request/Response models
@@ -341,6 +363,7 @@ class RunCodeRequest(BaseModel):
     """Request to run user Python code in the session workspace."""
     code: str = Field(..., min_length=1, max_length=20000)
     timeout_seconds: int = Field(default=20, ge=1, le=120)
+    memory_limit_mb: Optional[int] = Field(default=None, ge=64, le=8192)
 
 
 class RunCodeResponse(BaseModel):
@@ -350,6 +373,52 @@ class RunCodeResponse(BaseModel):
     stderr: str
     returncode: int
     execution_time_ms: int
+    cancelled: bool = False
+
+
+class CreateCodeJobRequest(BaseModel):
+    """Request to create an async user code execution job."""
+    code: str = Field(..., min_length=1, max_length=20000)
+    timeout_seconds: int = Field(default=20, ge=1, le=120)
+    memory_limit_mb: Optional[int] = Field(default=None, ge=64, le=8192)
+
+
+class CodeJobSummary(BaseModel):
+    """Summary for a background code execution job."""
+    job_id: str
+    session_id: str
+    status: str
+    created_at: float
+    started_at: Optional[float] = None
+    ended_at: Optional[float] = None
+
+
+class CodeJobDetailResponse(CodeJobSummary):
+    """Detailed response for a background code execution job."""
+    result: Optional[RunCodeResponse] = None
+
+
+class CancelCodeJobResponse(BaseModel):
+    """Response for async code job cancellation."""
+    success: bool
+    job_id: str
+    status: str
+
+
+class ContractRoute(BaseModel):
+    """Stable route contract item."""
+    method: str
+    path: str
+    stability: str
+    source: str
+
+
+class SidecarContractResponse(BaseModel):
+    """Public sidecar API contract."""
+    contract_version: str
+    api_version: str
+    routes: list[ContractRoute]
+    sse_event_types: list[str]
 
 
 class RunNotebookCellRequest(BaseModel):
@@ -996,8 +1065,62 @@ async def run_user_code(session_id: str, request: RunCodeRequest):
         session_id=session_id,
         code=request.code,
         timeout_seconds=request.timeout_seconds,
+        memory_limit_mb=request.memory_limit_mb,
     )
     return RunCodeResponse(**result)
+
+
+@app.post("/api/session/{session_id}/code/jobs", response_model=CodeJobSummary)
+async def create_code_job(session_id: str, request: CreateCodeJobRequest):
+    """
+    Create an asynchronous user-code execution job.
+    """
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    job = code_execution_manager.create_job(
+        session_id=session_id,
+        code=request.code,
+        timeout_seconds=request.timeout_seconds,
+        memory_limit_mb=request.memory_limit_mb,
+    )
+    return _build_code_job_summary(job)
+
+
+@app.get("/api/session/{session_id}/code/jobs/{job_id}", response_model=CodeJobDetailResponse)
+async def get_code_job(session_id: str, job_id: str):
+    """
+    Get asynchronous user-code execution job status.
+    """
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    job = code_execution_manager.get_job(job_id)
+    if not job or job.session_id != session_id:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return _build_code_job_detail(job)
+
+
+@app.post("/api/session/{session_id}/code/jobs/{job_id}/cancel", response_model=CancelCodeJobResponse)
+async def cancel_code_job(session_id: str, job_id: str):
+    """
+    Cancel asynchronous user-code execution job.
+    """
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    job = code_execution_manager.get_job(job_id)
+    if not job or job.session_id != session_id:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    updated = code_execution_manager.cancel_job(job_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    return CancelCodeJobResponse(success=True, job_id=job_id, status=updated.status)
 
 
 @app.post("/api/session/{session_id}/notebook/cell/run", response_model=RunNotebookCellResponse)
@@ -1024,6 +1147,113 @@ async def reset_notebook_session(session_id: str):
 
     notebook_manager.reset_session(session_id)
     return ResetNotebookResponse(success=True)
+
+
+@app.get("/api/contract", response_model=SidecarContractResponse)
+async def get_sidecar_contract():
+    """
+    Return frozen v1 sidecar API and streaming contract.
+    """
+    routes = [
+        ContractRoute(method="POST", path="/api/session/new", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="POST",
+            path="/api/session/{session_id}/message/stream",
+            stability="stable",
+            source="demo_parity",
+        ),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/dynamic_report",
+            stability="stable",
+            source="demo_parity",
+        ),
+        ContractRoute(method="GET", path="/api/session/{session_id}/state", stability="stable", source="demo_parity"),
+        ContractRoute(method="POST", path="/api/session/{session_id}/end", stability="stable", source="demo_parity"),
+        ContractRoute(method="GET", path="/api/sessions", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/history",
+            stability="stable",
+            source="demo_parity",
+        ),
+        ContractRoute(
+            method="POST",
+            path="/api/session/{session_id}/upload",
+            stability="stable",
+            source="demo_parity",
+        ),
+        ContractRoute(method="GET", path="/api/session/{session_id}/files", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="DELETE",
+            path="/api/session/{session_id}/files/{filename}",
+            stability="stable",
+            source="demo_parity",
+        ),
+        ContractRoute(method="GET", path="/api/courses", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="GET",
+            path="/api/courses/{course_id}/chapters",
+            stability="stable",
+            source="demo_parity",
+        ),
+        ContractRoute(method="GET", path="/api/chapters", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="POST",
+            path="/api/session/{session_id}/code/run",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="POST",
+            path="/api/session/{session_id}/code/jobs",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/code/jobs/{job_id}",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="POST",
+            path="/api/session/{session_id}/code/jobs/{job_id}/cancel",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="POST",
+            path="/api/session/{session_id}/notebook/cell/run",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="POST",
+            path="/api/session/{session_id}/notebook/reset",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(method="GET", path="/api/contract", stability="stable", source="sidecar_extension"),
+        ContractRoute(method="GET", path="/health", stability="stable", source="demo_parity"),
+    ]
+    sse_event_types = [
+        "start",
+        "companion_start",
+        "companion_chunk",
+        "companion_complete",
+        "consultation_start",
+        "consultation_complete",
+        "consultation_error",
+        "complete",
+        "error",
+    ]
+    return SidecarContractResponse(
+        contract_version="v1",
+        api_version=app.version,
+        routes=routes,
+        sse_event_types=sse_event_types,
+    )
 
 
 # Serve static files (frontend)

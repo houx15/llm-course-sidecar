@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -156,12 +157,13 @@ def test_run_user_code_endpoint(monkeypatch):
     monkeypatch.setattr(
         sidecar_main.user_code_runner,
         "run_python",
-        lambda session_id, code, timeout_seconds: {
+        lambda session_id, code, timeout_seconds, memory_limit_mb=None, cancel_event=None: {
             "success": True,
             "stdout": "ok",
             "stderr": "",
             "returncode": 0,
             "execution_time_ms": 10,
+            "cancelled": False,
         },
     )
 
@@ -174,6 +176,67 @@ def test_run_user_code_endpoint(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert response.json()["stdout"] == "ok"
+
+
+def test_code_job_endpoints(monkeypatch):
+    fake_orchestrator = FakeOrchestrator(storage=FakeStorage(exists=True))
+    monkeypatch.setattr(sidecar_main, "_get_orchestrator", lambda _sid: fake_orchestrator)
+
+    @dataclass
+    class FakeJob:
+        job_id: str
+        session_id: str
+        status: str
+        created_at: float
+        started_at: float | None = None
+        ended_at: float | None = None
+        result: dict | None = None
+
+    fake_job = FakeJob(
+        job_id="job-1",
+        session_id="sess-1",
+        status="running",
+        created_at=1.0,
+    )
+    cancelled_job = FakeJob(
+        job_id="job-1",
+        session_id="sess-1",
+        status="cancelled",
+        created_at=1.0,
+        started_at=1.1,
+        ended_at=1.2,
+        result={
+            "success": False,
+            "stdout": "",
+            "stderr": "Execution cancelled",
+            "returncode": -2,
+            "execution_time_ms": 100,
+            "cancelled": True,
+        },
+    )
+
+    monkeypatch.setattr(
+        sidecar_main.code_execution_manager,
+        "create_job",
+        lambda session_id, code, timeout_seconds=20, memory_limit_mb=None: fake_job,
+    )
+    monkeypatch.setattr(sidecar_main.code_execution_manager, "get_job", lambda job_id: cancelled_job)
+    monkeypatch.setattr(sidecar_main.code_execution_manager, "cancel_job", lambda job_id: cancelled_job)
+
+    with TestClient(sidecar_main.app) as client:
+        create_resp = client.post(
+            "/api/session/sess-1/code/jobs",
+            json={"code": "print('hello')", "timeout_seconds": 5, "memory_limit_mb": 256},
+        )
+        get_resp = client.get("/api/session/sess-1/code/jobs/job-1")
+        cancel_resp = client.post("/api/session/sess-1/code/jobs/job-1/cancel")
+
+    assert create_resp.status_code == 200
+    assert create_resp.json()["job_id"] == "job-1"
+    assert get_resp.status_code == 200
+    assert get_resp.json()["result"]["cancelled"] is True
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json() == {"success": True, "job_id": "job-1", "status": "cancelled"}
 
 
 def test_notebook_cell_and_reset_endpoints(monkeypatch):
@@ -203,3 +266,14 @@ def test_notebook_cell_and_reset_endpoints(monkeypatch):
     assert run_resp.json()["result_repr"] == "3"
     assert reset_resp.status_code == 200
     assert reset_resp.json() == {"success": True}
+
+
+def test_contract_endpoint():
+    with TestClient(sidecar_main.app) as client:
+        response = client.get("/api/contract")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["contract_version"] == "v1"
+    assert "companion_chunk" in payload["sse_event_types"]
+    assert any(route["path"] == "/api/session/{session_id}/code/jobs" for route in payload["routes"])

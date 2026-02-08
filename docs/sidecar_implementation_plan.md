@@ -182,6 +182,7 @@ Manifest minimum:
 - [~] Expand tests to cover real bundle fixture loading (chapter files + global prompt fallback)
   - done: chapter bundle overlay fixture test
   - pending: global prompt fallback fixture coverage
+- [x] Contract freeze endpoint implemented: `GET /api/contract` (routes + SSE event types)
 
 ## Phase 1 - Contract Freeze and Extraction
 
@@ -194,6 +195,7 @@ Deliverables:
 Exit criteria:
 - desktop can run one end-to-end message turn using new sidecar repo in dev mode
 - desktop chapter bundle content is actually used (not only demo local paths)
+- sidecar serves a machine-readable contract (`/api/contract`) consumed by desktop integration tests
 
 ## Phase 2 - Execution Runtime Hardening
 
@@ -202,6 +204,11 @@ Deliverables:
 - timeout/resource limits + cancellation
 - stable error taxonomy
 - initial user code execution endpoint scaffolded (`/api/session/{session_id}/code/run`)
+- async code-job APIs scaffolded:
+  - `POST /api/session/{session_id}/code/jobs`
+  - `GET /api/session/{session_id}/code/jobs/{job_id}`
+  - `POST /api/session/{session_id}/code/jobs/{job_id}/cancel`
+- user-code memory guardrail added (`memory_limit_mb`)
 
 Exit criteria:
 - deterministic failure handling for code tasks
@@ -248,8 +255,8 @@ Exit criteria:
 
 ## Immediate Next Actions
 
-1. Scaffold project (`pyproject.toml`, package layout, test harness).
-2. Port minimal session API from `demo` for a first runnable build.
-3. Freeze JSON schemas for session creation and stream events.
-4. Implement execution lane abstraction before feature growth.
-5. Add initial runtime manifest generator for `python_runtime` bundle.
+1. Add fixture-driven tests for global prompt fallback (`interaction_protocol.md`, `socratic_vs_direct.md` from main agents).
+2. Introduce execution error taxonomy constants shared by sync and async code APIs.
+3. Add bundle manifest schema + validation command for `python_runtime` artifacts.
+4. Implement desktop-side health and contract preflight checks before opening a session.
+5. Build first CI draft for `macos-x64`, `macos-arm64`, `windows-x64` sidecar runtime bundles.

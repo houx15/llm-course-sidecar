@@ -21,6 +21,7 @@ This repo owns the production sidecar runtime extracted from `demo/`:
 ## Source of Truth Docs
 
 - `docs/sidecar_implementation_plan.md`
+- `docs/api_contract_v1.md`
 
 ## Current Status
 
@@ -33,9 +34,14 @@ Phase 1 bootstrap is started:
 - yellow-page lookup supports runtime env/bundle paths (not only demo local `.metadata`)
 - core prompt/expert path defaults are now sidecar-repo aligned (no `app/server/*` dependency)
 - initial user-code execution API added: `POST /api/session/{session_id}/code/run`
+- async user-code job APIs added:
+  - `POST /api/session/{session_id}/code/jobs`
+  - `GET /api/session/{session_id}/code/jobs/{job_id}`
+  - `POST /api/session/{session_id}/code/jobs/{job_id}/cancel`
 - initial notebook APIs added:
   - `POST /api/session/{session_id}/notebook/cell/run`
   - `POST /api/session/{session_id}/notebook/reset`
+- contract freeze endpoint added: `GET /api/contract`
 
 ## Run (Dev)
 
