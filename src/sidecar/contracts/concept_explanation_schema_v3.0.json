@@ -1,0 +1,163 @@
+{
+  "$defs": {
+    "KnowledgeSource": {
+      "description": "Structured knowledge source reference.",
+      "properties": {
+        "doc": {
+          "description": "Document or file path",
+          "minLength": 1,
+          "title": "Doc",
+          "type": "string"
+        },
+        "excerpt_used": {
+          "description": "Whether an excerpt from this source was used",
+          "title": "Excerpt Used",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "doc",
+        "excerpt_used"
+      ],
+      "title": "KnowledgeSource",
+      "type": "object"
+    }
+  },
+  "description": "Expert output for concept explanation.",
+  "properties": {
+    "output_type": {
+      "const": "concept_explanation",
+      "default": "concept_explanation",
+      "title": "Output Type",
+      "type": "string"
+    },
+    "info_gain": {
+      "description": "Whether this response provides meaningful new information relative to prior rounds",
+      "title": "Info Gain",
+      "type": "boolean"
+    },
+    "confidence": {
+      "default": "medium",
+      "description": "Expert's confidence level in this output",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "knowledge_sources": {
+      "description": "Sources consulted for this output",
+      "items": {
+        "$ref": "#/$defs/KnowledgeSource"
+      },
+      "title": "Knowledge Sources",
+      "type": "array"
+    },
+    "answer_summary": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Brief summary of the answer",
+      "title": "Answer Summary"
+    },
+    "recommended_next_step": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Suggested next action for RMA or student",
+      "title": "Recommended Next Step"
+    },
+    "concept_name": {
+      "minLength": 1,
+      "title": "Concept Name",
+      "type": "string"
+    },
+    "definition": {
+      "minLength": 1,
+      "title": "Definition",
+      "type": "string"
+    },
+    "use_cases": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Use Cases",
+      "type": "array"
+    },
+    "syntax": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Syntax"
+    },
+    "parameters": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parameters"
+    },
+    "simple_example": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Simple Example"
+    },
+    "common_pitfalls": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Common Pitfalls",
+      "type": "array"
+    },
+    "related_concepts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Related Concepts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "info_gain",
+    "concept_name",
+    "definition"
+  ],
+  "title": "Expert Output: Concept Explanation",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

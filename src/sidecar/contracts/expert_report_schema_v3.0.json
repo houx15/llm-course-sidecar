@@ -1,0 +1,111 @@
+{
+  "description": "Student-visible expert report authored by RMA.",
+  "properties": {
+    "report_id": {
+      "description": "Unique report identifier",
+      "title": "Report Id",
+      "type": "string"
+    },
+    "consultation_id": {
+      "title": "Consultation Id",
+      "type": "string"
+    },
+    "user_turn_index": {
+      "minimum": 0,
+      "title": "User Turn Index",
+      "type": "integer"
+    },
+    "scenario_id": {
+      "title": "Scenario Id",
+      "type": "string"
+    },
+    "expert_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Primary expert consulted for this report",
+      "title": "Expert Id"
+    },
+    "title": {
+      "description": "Report title",
+      "maxLength": 140,
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "created_at": {
+      "description": "ISO 8601 timestamp when report was created",
+      "title": "Created At",
+      "type": "string"
+    },
+    "binding_effect": {
+      "default": "none",
+      "description": "Whether this report triggers binding RMA decisions",
+      "enum": [
+        "none",
+        "abort_task_path"
+      ],
+      "title": "Binding Effect",
+      "type": "string"
+    },
+    "summary": {
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    },
+    "key_findings": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Key Findings",
+      "type": "array"
+    },
+    "evidence": {
+      "additionalProperties": true,
+      "title": "Evidence",
+      "type": "object"
+    },
+    "implication_for_next_step": {
+      "minLength": 1,
+      "title": "Implication For Next Step",
+      "type": "string"
+    },
+    "expert_sources": {
+      "description": "List of experts consulted",
+      "items": {
+        "type": "string"
+      },
+      "title": "Expert Sources",
+      "type": "array"
+    },
+    "related_consultation_ids": {
+      "description": "Related consultation IDs for traceability",
+      "items": {
+        "type": "string"
+      },
+      "title": "Related Consultation Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "report_id",
+    "consultation_id",
+    "user_turn_index",
+    "scenario_id",
+    "title",
+    "created_at",
+    "summary",
+    "key_findings",
+    "implication_for_next_step"
+  ],
+  "title": "RMA Expert Report (Student-Viewable)",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

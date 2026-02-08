@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MemoDigest",
+  "description": "Condensed summary from Memo Agent for Roadmap Manager consumption",
+  "type": "object",
+  "required": [
+    "key_observations",
+    "student_struggles",
+    "student_strengths",
+    "student_sentiment",
+    "blocker_type",
+    "progress_delta"
+  ],
+  "properties": {
+    "key_observations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Key observations from recent turns (e.g., 'Student successfully loaded CSV', 'Student confused about DataFrame indexing')"
+    },
+    "student_struggles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Areas where student is struggling (e.g., 'File path handling', 'Understanding boolean indexing')"
+    },
+    "student_strengths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Areas where student is doing well (e.g., 'Good understanding of basic syntax', 'Asks clarifying questions')"
+    },
+    "student_sentiment": {
+      "type": "string",
+      "enum": ["engaged", "confused", "frustrated", "fatigued"],
+      "description": "Overall emotional state detected across recent turns"
+    },
+    "blocker_type": {
+      "type": "string",
+      "enum": ["none", "scaffolding", "core_concept", "core_implementation", "external_resource_needed"],
+      "description": "Current blocker type if any"
+    },
+    "progress_delta": {
+      "type": "string",
+      "enum": ["none", "evidence_added", "checkpoint_reached", "regressed"],
+      "description": "Progress change since last memo update"
+    },
+    "diagnostic_log": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Internal diagnostic notes (not shown to student, not fed to CA by default)"
+    }
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "KnowledgeSource": {
+      "description": "Structured knowledge source reference.",
+      "properties": {
+        "doc": {
+          "description": "Document or file path",
+          "minLength": 1,
+          "title": "Doc",
+          "type": "string"
+        },
+        "excerpt_used": {
+          "description": "Whether an excerpt from this source was used",
+          "title": "Excerpt Used",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "doc",
+        "excerpt_used"
+      ],
+      "title": "KnowledgeSource",
+      "type": "object"
+    }
+  },
+  "description": "Expert output for dataset overview.",
+  "properties": {
+    "output_type": {
+      "const": "dataset_overview_report",
+      "default": "dataset_overview_report",
+      "title": "Output Type",
+      "type": "string"
+    },
+    "info_gain": {
+      "description": "Whether this response provides meaningful new information relative to prior rounds",
+      "title": "Info Gain",
+      "type": "boolean"
+    },
+    "confidence": {
+      "default": "medium",
+      "description": "Expert's confidence level in this output",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "knowledge_sources": {
+      "description": "Sources consulted for this output",
+      "items": {
+        "$ref": "#/$defs/KnowledgeSource"
+      },
+      "title": "Knowledge Sources",
+      "type": "array"
+    },
+    "answer_summary": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Brief summary of the answer",
+      "title": "Answer Summary"
+    },
+    "recommended_next_step": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Suggested next action for RMA or student",
+      "title": "Recommended Next Step"
+    },
+    "summary": {
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    },
+    "columns": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Columns",
+      "type": "array"
+    },
+    "row_count": {
+      "minimum": 0,
+      "title": "Row Count",
+      "type": "integer"
+    },
+    "duplicate_rows": {
+      "minimum": 0,
+      "title": "Duplicate Rows",
+      "type": "integer"
+    },
+    "overall_missing_rate": {
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Overall Missing Rate",
+      "type": "number"
+    }
+  },
+  "required": [
+    "info_gain",
+    "summary",
+    "row_count",
+    "duplicate_rows",
+    "overall_missing_rate"
+  ],
+  "title": "Expert Output: Dataset Overview Report",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

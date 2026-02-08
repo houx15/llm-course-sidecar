@@ -1,0 +1,566 @@
+{
+  "$defs": {
+    "ConsultationLogging": {
+      "description": "Logging configuration for consultations.",
+      "properties": {
+        "log_all_envelopes": {
+          "default": true,
+          "title": "Log All Envelopes",
+          "type": "boolean"
+        },
+        "log_all_transcripts": {
+          "default": true,
+          "title": "Log All Transcripts",
+          "type": "boolean"
+        },
+        "log_all_expert_outputs": {
+          "default": true,
+          "title": "Log All Expert Outputs",
+          "type": "boolean"
+        },
+        "log_skill_invocations": {
+          "default": true,
+          "title": "Log Skill Invocations",
+          "type": "boolean"
+        },
+        "audit_trail_required": {
+          "default": true,
+          "title": "Audit Trail Required",
+          "type": "boolean"
+        }
+      },
+      "title": "ConsultationLogging",
+      "type": "object"
+    },
+    "ConsultationScenario": {
+      "description": "A consultation scenario defined in consultation_guide.json.",
+      "properties": {
+        "scenario_id": {
+          "description": "Unique scenario identifier",
+          "title": "Scenario Id",
+          "type": "string"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "trigger_conditions": {
+          "$ref": "#/$defs/TriggerConditions"
+        },
+        "expert_selection_rule": {
+          "enum": [
+            "rank_and_score_then_select",
+            "fixed_expert_set"
+          ],
+          "title": "Expert Selection Rule",
+          "type": "string"
+        },
+        "fixed_expert_set": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fixed set of experts (only if expert_selection_rule == fixed_expert_set)",
+          "title": "Fixed Expert Set"
+        },
+        "expert_scoring_hints": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "description": "Hints for scoring experts",
+          "title": "Expert Scoring Hints",
+          "type": "object"
+        },
+        "consulting_envelope_template": {
+          "$ref": "#/$defs/ConsultingEnvelopeTemplate"
+        },
+        "expected_output_template": {
+          "$ref": "#/$defs/ExpectedOutputTemplate"
+        },
+        "termination_rules": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Termination Rules",
+          "type": "array"
+        },
+        "binding_decision_rules": {
+          "additionalProperties": true,
+          "title": "Binding Decision Rules",
+          "type": "object"
+        }
+      },
+      "required": [
+        "scenario_id",
+        "description",
+        "trigger_conditions",
+        "expert_selection_rule",
+        "consulting_envelope_template",
+        "expected_output_template",
+        "termination_rules"
+      ],
+      "title": "ConsultationScenario",
+      "type": "object"
+    },
+    "ConsultingEnvelopeTemplate": {
+      "description": "Template for consulting envelope in a scenario.",
+      "properties": {
+        "consulting_letter_title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Consulting Letter Title",
+          "type": "string"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "expected_output_type": {
+          "pattern": "^[a-z][a-z0-9_\\-]{1,63}$",
+          "title": "Expected Output Type",
+          "type": "string"
+        },
+        "context_fields": {
+          "description": "Fields to be filled from context",
+          "items": {
+            "type": "string"
+          },
+          "title": "Context Fields",
+          "type": "array"
+        },
+        "preferred_expert_tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Expert Tags"
+        },
+        "required_skill_handle": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_\\-]{1,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Skill Handle"
+        }
+      },
+      "required": [
+        "consulting_letter_title",
+        "question",
+        "expected_output_type"
+      ],
+      "title": "ConsultingEnvelopeTemplate",
+      "type": "object"
+    },
+    "ExpectedOutputTemplate": {
+      "description": "Template defining expected output structure from expert.",
+      "properties": {
+        "output_type": {
+          "pattern": "^[a-z][a-z0-9_\\-]{1,63}$",
+          "title": "Output Type",
+          "type": "string"
+        },
+        "required_fields": {
+          "description": "Fields that must be present in output",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Fields",
+          "type": "array"
+        },
+        "binding": {
+          "default": false,
+          "description": "Whether this output triggers binding RMA decisions",
+          "title": "Binding",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "output_type",
+        "required_fields"
+      ],
+      "title": "ExpectedOutputTemplate",
+      "type": "object"
+    },
+    "MultiConsultationPolicy": {
+      "description": "Policy for handling multiple consultations.",
+      "properties": {
+        "parallel": {
+          "default": true,
+          "description": "Whether to run consultations in parallel",
+          "title": "Parallel",
+          "type": "boolean"
+        },
+        "wait_for_all": {
+          "default": true,
+          "description": "Whether to wait for all consultations to complete",
+          "title": "Wait For All",
+          "type": "boolean"
+        },
+        "max_rounds_per_user_turn": {
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Max Rounds Per User Turn",
+          "type": "integer"
+        },
+        "selection_rule": {
+          "$ref": "#/$defs/MultiConsultationSelectionRule"
+        }
+      },
+      "required": [
+        "max_rounds_per_user_turn",
+        "selection_rule"
+      ],
+      "title": "MultiConsultationPolicy",
+      "type": "object"
+    },
+    "MultiConsultationSelectionRule": {
+      "description": "Selection rules for multi-consultation scenarios.",
+      "properties": {
+        "if_any_full_match_consult_all_full_match": {
+          "default": true,
+          "title": "If Any Full Match Consult All Full Match",
+          "type": "boolean"
+        },
+        "ignore_partial_if_full_exists": {
+          "default": true,
+          "title": "Ignore Partial If Full Exists",
+          "type": "boolean"
+        },
+        "if_only_partial_consult_all_partial": {
+          "default": true,
+          "title": "If Only Partial Consult All Partial",
+          "type": "boolean"
+        },
+        "if_all_irrelevant_skip_consultation": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "If All Irrelevant Skip Consultation"
+        }
+      },
+      "title": "MultiConsultationSelectionRule",
+      "type": "object"
+    },
+    "RMAExpertReportTemplate": {
+      "description": "Template for RMA expert reports.",
+      "properties": {
+        "required_fields": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Fields",
+          "type": "array"
+        },
+        "format": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "markdown",
+          "title": "Format"
+        },
+        "student_visible": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": true,
+          "title": "Student Visible"
+        },
+        "ca_consumable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": true,
+          "title": "Ca Consumable"
+        }
+      },
+      "required": [
+        "required_fields"
+      ],
+      "title": "RMAExpertReportTemplate",
+      "type": "object"
+    },
+    "TriggerConditions": {
+      "description": "Trigger conditions for a consultation scenario.",
+      "properties": {
+        "user_uploaded_file": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Uploaded File"
+        },
+        "file_extensions": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Extensions"
+        },
+        "attempts_since_last_progress_gte": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempts Since Last Progress Gte"
+        },
+        "task_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "core",
+                "scaffolding"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Type"
+        },
+        "detected_error_types_any": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detected Error Types Any"
+        },
+        "student_sentiment": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "engaged",
+                  "confused",
+                  "frustrated",
+                  "fatigued"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Student Sentiment"
+        },
+        "blocker_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blocker Type"
+        },
+        "ca_teaching_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "socratic",
+                "direct"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ca Teaching Mode"
+        },
+        "checkpoint_reached": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkpoint Reached"
+        },
+        "error_message_available": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Message Available"
+        },
+        "evidence_quality": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Quality"
+        }
+      },
+      "title": "TriggerConditions",
+      "type": "object"
+    }
+  },
+  "description": "Chapter-level consultation guide configuration.",
+  "properties": {
+    "chapter_id": {
+      "minLength": 1,
+      "title": "Chapter Id",
+      "type": "string"
+    },
+    "version": {
+      "description": "Semantic version (e.g., 3.0 or 3.0.1)",
+      "pattern": "^\\d+\\.\\d+(\\.\\d+)?$",
+      "title": "Version",
+      "type": "string"
+    },
+    "available_experts_list": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Available Experts List",
+      "type": "array"
+    },
+    "relevance_scale": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Relevance scale definitions",
+      "title": "Relevance Scale",
+      "type": "object"
+    },
+    "multi_consultation_policy": {
+      "$ref": "#/$defs/MultiConsultationPolicy"
+    },
+    "consultation_scenarios": {
+      "items": {
+        "$ref": "#/$defs/ConsultationScenario"
+      },
+      "minItems": 1,
+      "title": "Consultation Scenarios",
+      "type": "array"
+    },
+    "rma_expert_report_template": {
+      "$ref": "#/$defs/RMAExpertReportTemplate"
+    },
+    "consultation_logging": {
+      "$ref": "#/$defs/ConsultationLogging"
+    },
+    "chapter_specific_notes": {
+      "additionalProperties": true,
+      "title": "Chapter Specific Notes",
+      "type": "object"
+    }
+  },
+  "required": [
+    "chapter_id",
+    "version",
+    "available_experts_list",
+    "relevance_scale",
+    "multi_consultation_policy",
+    "consultation_scenarios",
+    "rma_expert_report_template",
+    "consultation_logging"
+  ],
+  "title": "Chapter Consultation Guide (v3.0)",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

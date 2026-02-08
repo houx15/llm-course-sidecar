@@ -1,0 +1,144 @@
+{
+  "$defs": {
+    "ExpectedOutputTemplate": {
+      "description": "Template defining expected output structure from expert.",
+      "properties": {
+        "output_type": {
+          "pattern": "^[a-z][a-z0-9_\\-]{1,63}$",
+          "title": "Output Type",
+          "type": "string"
+        },
+        "required_fields": {
+          "description": "Fields that must be present in output",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Required Fields",
+          "type": "array"
+        },
+        "binding": {
+          "default": false,
+          "description": "Whether this output triggers binding RMA decisions",
+          "title": "Binding",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "output_type",
+        "required_fields"
+      ],
+      "title": "ExpectedOutputTemplate",
+      "type": "object"
+    },
+    "SessionScope": {
+      "description": "Session scope defining allowed file access boundaries.",
+      "properties": {
+        "allowed_root": {
+          "description": "Root directory path for file access",
+          "minLength": 1,
+          "title": "Allowed Root",
+          "type": "string"
+        }
+      },
+      "required": [
+        "allowed_root"
+      ],
+      "title": "SessionScope",
+      "type": "object"
+    }
+  },
+  "description": "Envelope sent from RMA to expert for consultation.",
+  "properties": {
+    "consulting_letter_title": {
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Consulting Letter Title",
+      "type": "string"
+    },
+    "consultation_id": {
+      "description": "Unique consultation identifier",
+      "title": "Consultation Id",
+      "type": "string"
+    },
+    "user_turn_index": {
+      "minimum": 0,
+      "title": "User Turn Index",
+      "type": "integer"
+    },
+    "round_index": {
+      "description": "Current round number (1-10)",
+      "maximum": 10,
+      "minimum": 1,
+      "title": "Round Index",
+      "type": "integer"
+    },
+    "rounds_remaining_after_this": {
+      "maximum": 10,
+      "minimum": 0,
+      "title": "Rounds Remaining After This",
+      "type": "integer"
+    },
+    "parallel_group_id": {
+      "description": "Identifier for parallel consultation group",
+      "title": "Parallel Group Id",
+      "type": "string"
+    },
+    "scenario_id": {
+      "description": "Scenario identifier from consultation_guide",
+      "title": "Scenario Id",
+      "type": "string"
+    },
+    "expert_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Target expert identifier (optional if implied by routing)",
+      "title": "Expert Id"
+    },
+    "question": {
+      "minLength": 1,
+      "title": "Question",
+      "type": "string"
+    },
+    "session_scope": {
+      "$ref": "#/$defs/SessionScope"
+    },
+    "expected_output_template": {
+      "$ref": "#/$defs/ExpectedOutputTemplate"
+    },
+    "context": {
+      "additionalProperties": true,
+      "description": "Additional context for the consultation",
+      "title": "Context",
+      "type": "object"
+    },
+    "constraints": {
+      "additionalProperties": true,
+      "description": "Optional constraints (e.g., token budget hints)",
+      "title": "Constraints",
+      "type": "object"
+    }
+  },
+  "required": [
+    "consulting_letter_title",
+    "consultation_id",
+    "user_turn_index",
+    "round_index",
+    "rounds_remaining_after_this",
+    "parallel_group_id",
+    "scenario_id",
+    "question",
+    "session_scope",
+    "expected_output_template"
+  ],
+  "title": "Consulting Envelope (RMA → Expert)",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

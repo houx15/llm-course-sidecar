@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "KnowledgeSource": {
+      "description": "Structured knowledge source reference.",
+      "properties": {
+        "doc": {
+          "description": "Document or file path",
+          "minLength": 1,
+          "title": "Doc",
+          "type": "string"
+        },
+        "excerpt_used": {
+          "description": "Whether an excerpt from this source was used",
+          "title": "Excerpt Used",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "doc",
+        "excerpt_used"
+      ],
+      "title": "KnowledgeSource",
+      "type": "object"
+    }
+  },
+  "description": "Expert output for dataset suitability judgment.",
+  "properties": {
+    "output_type": {
+      "const": "suitability_judgment",
+      "default": "suitability_judgment",
+      "title": "Output Type",
+      "type": "string"
+    },
+    "info_gain": {
+      "description": "Whether this response provides meaningful new information relative to prior rounds",
+      "title": "Info Gain",
+      "type": "boolean"
+    },
+    "confidence": {
+      "default": "medium",
+      "description": "Expert's confidence level in this output",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "knowledge_sources": {
+      "description": "Sources consulted for this output",
+      "items": {
+        "$ref": "#/$defs/KnowledgeSource"
+      },
+      "title": "Knowledge Sources",
+      "type": "array"
+    },
+    "answer_summary": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Brief summary of the answer",
+      "title": "Answer Summary"
+    },
+    "recommended_next_step": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Suggested next action for RMA or student",
+      "title": "Recommended Next Step"
+    },
+    "is_suitable": {
+      "description": "Whether the dataset/resource is suitable for the task",
+      "title": "Is Suitable",
+      "type": "boolean"
+    },
+    "blocking_issues": {
+      "description": "Critical issues that prevent task completion",
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocking Issues",
+      "type": "array"
+    },
+    "warning_issues": {
+      "description": "Non-critical issues that may affect quality",
+      "items": {
+        "type": "string"
+      },
+      "title": "Warning Issues",
+      "type": "array"
+    },
+    "evidence": {
+      "additionalProperties": true,
+      "description": "Structured evidence supporting the judgment",
+      "title": "Evidence",
+      "type": "object"
+    }
+  },
+  "required": [
+    "info_gain",
+    "is_suitable"
+  ],
+  "title": "Expert Output: Suitability Judgment",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

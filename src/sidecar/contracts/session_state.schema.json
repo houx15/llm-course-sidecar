@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SessionState",
+  "description": "Complete session state tracking progress and configuration",
+  "type": "object",
+  "required": [
+    "session_id",
+    "chapter_id",
+    "turn_index",
+    "subtask_status",
+    "end_suggested",
+    "end_confirmed",
+    "constraints"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Unique session identifier"
+    },
+    "chapter_id": {
+      "type": "string",
+      "description": "Chapter identifier (e.g., 'ch1_pandas_basics')"
+    },
+    "turn_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Current turn number (0-indexed)"
+    },
+    "subtask_status": {
+      "type": "object",
+      "description": "Status of each subtask",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["status", "evidence"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["not_started", "in_progress", "completed"],
+            "description": "Current status of the subtask"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Evidence of completion (e.g., 'User showed correct output', 'User explained concept correctly')"
+          }
+        }
+      }
+    },
+    "end_suggested": {
+      "type": "boolean",
+      "description": "Whether RMA has suggested ending the session"
+    },
+    "end_confirmed": {
+      "type": "boolean",
+      "description": "Whether user has confirmed ending the session"
+    },
+    "constraints": {
+      "type": "object",
+      "required": ["max_input_length", "batch_error_log_every_n_turns", "max_attempts_before_unlock"],
+      "properties": {
+        "max_input_length": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum characters per user message"
+        },
+        "batch_error_log_every_n_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How often to update student error summary"
+        },
+        "max_attempts_before_unlock": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of attempts before unlocking instruction packet (K value)"
+        }
+      }
+    },
+    "current_instruction_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Current version of the instruction packet (v2.0 field)"
+    },
+    "attempts_since_last_progress": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of attempts since last progress was made (v2.0 field)"
+    },
+    "last_progress_turn": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Turn index when last progress was made (v2.0 field)"
+    }
+  }
+}

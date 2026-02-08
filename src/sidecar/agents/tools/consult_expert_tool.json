@@ -1,0 +1,66 @@
+{
+  "expert_id": {
+    "type": "string",
+    "required": true,
+    "description": "专家ID，从可用专家列表中选择"
+  },
+  "question": {
+    "type": "string",
+    "required": true,
+    "description": "向专家提出的具体问题（中文）"
+  },
+  "context": {
+    "type": "object",
+    "required": true,
+    "description": "提供给专家的上下文信息",
+    "properties": {
+      "file_name": {
+        "type": "string",
+        "description": "相关文件名（如适用）"
+      },
+      "task_id": {
+        "type": "string",
+        "description": "当前任务ID"
+      },
+      "task_requirements": {
+        "type": "string",
+        "description": "任务要求说明"
+      },
+      "student_confusion": {
+        "type": "string",
+        "description": "学生的困惑点（如适用）"
+      },
+      "error_message": {
+        "type": "string",
+        "description": "错误信息（如适用）"
+      }
+    }
+  },
+  "expected_output_type": {
+    "type": "string",
+    "required": true,
+    "description": "期望的专家输出类型",
+    "enum": [
+      "suitability_judgment",
+      "concept_explanation",
+      "error_diagnosis",
+      "validation_report"
+    ]
+  },
+  "scenario_id": {
+    "type": "string",
+    "required": false,
+    "description": "场景ID（可选）",
+    "enum": [
+      "dataset_suitability_check",
+      "concept_clarification",
+      "error_diagnosis",
+      "progress_validation"
+    ]
+  },
+  "reasoning": {
+    "type": "string",
+    "required": true,
+    "description": "解释为什么需要咨询这个专家"
+  }
+}

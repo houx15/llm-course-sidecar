@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InstructionPacket",
+  "description": "Instructions from Roadmap Manager to Companion Agent",
+  "type": "object",
+  "required": [
+    "current_focus",
+    "guidance_for_ca",
+    "must_check",
+    "instruction_version",
+    "lock_until",
+    "allow_setup_helper_code"
+  ],
+  "properties": {
+    "current_focus": {
+      "type": "string",
+      "description": "Which subtask(s) the learner should focus on now"
+    },
+    "guidance_for_ca": {
+      "type": "string",
+      "description": "How CA should guide the learner (e.g., 'Ask them to try loading the CSV first', 'Encourage exploration of different filtering methods')"
+    },
+    "must_check": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 2,
+      "description": "Critical evidence items CA must verify (max 2). E.g., ['Can display DataFrame shape', 'Understands head() output']"
+    },
+    "nice_check": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 1,
+      "description": "Optional evidence item CA can check if time permits (max 1)"
+    },
+    "instruction_version": {
+      "type": "integer",
+      "description": "Version number of this instruction packet. Increments only when checkpoint reached or stuck threshold exceeded."
+    },
+    "lock_until": {
+      "type": "string",
+      "enum": [
+        "checkpoint_reached",
+        "attempts_exceeded",
+        "new_error_type",
+        "user_uploads_suitable_dataset_or_uses_example"
+      ],
+      "description": "Condition that must be met before updating this instruction packet"
+    },
+    "allow_setup_helper_code": {
+      "type": "boolean",
+      "description": "Whether CA is allowed to provide runnable scaffolding code for non-core tasks"
+    },
+    "setup_helper_scope": {
+      "type": "string",
+      "enum": ["none", "file_creation", "env_setup", "path_check", "data_generation"],
+      "description": "If setup helper is allowed, what scope it covers"
+    },
+    "task_type": {
+      "type": "string",
+      "enum": ["core", "scaffolding"],
+      "description": "Whether current focus is a core assessed task or scaffolding setup"
+    }
+  }
+}

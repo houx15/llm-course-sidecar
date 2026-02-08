@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TurnOutcome",
+  "description": "Structured outcome of a single turn from Companion Agent",
+  "type": "object",
+  "required": [
+    "what_user_attempted",
+    "what_user_observed",
+    "ca_teaching_mode",
+    "ca_next_suggestion",
+    "checkpoint_reached",
+    "blocker_type",
+    "student_sentiment"
+  ],
+  "properties": {
+    "what_user_attempted": {
+      "type": "string",
+      "description": "What the user tried to do this turn (e.g., 'Tried to load CSV file', 'Attempted to filter data by condition')"
+    },
+    "what_user_observed": {
+      "type": "string",
+      "description": "What the user reported seeing or experiencing (e.g., 'Got FileNotFoundError', 'Successfully displayed first 5 rows')"
+    },
+    "ca_teaching_mode": {
+      "type": "string",
+      "enum": ["socratic", "direct"],
+      "description": "Which teaching mode CA used this turn"
+    },
+    "ca_next_suggestion": {
+      "type": "string",
+      "description": "What CA suggested the user try next (e.g., 'Check file path', 'Try using head() method')"
+    },
+    "checkpoint_reached": {
+      "type": "boolean",
+      "description": "Whether the learner has met the current checkpoint criteria (allows RMA to update instruction packet)"
+    },
+    "blocker_type": {
+      "type": "string",
+      "enum": ["none", "scaffolding", "core_concept", "core_implementation", "external_resource_needed"],
+      "description": "Type of blocker encountered: none, scaffolding (setup issue), core (learning obstacle), or external (needs ChatGPT/blog help)"
+    },
+    "student_sentiment": {
+      "type": "string",
+      "enum": ["engaged", "confused", "frustrated", "fatigued"],
+      "description": "Detected emotional state of the learner based on language and progress patterns"
+    },
+    "evidence_for_subtasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["subtask_id", "evidence"],
+        "properties": {
+          "subtask_id": {
+            "type": "string",
+            "description": "ID of the subtask (e.g., 'load_csv', 'basic_stats')"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "What evidence was observed for this subtask (e.g., 'Successfully loaded DataFrame with 100 rows')"
+          }
+        }
+      },
+      "description": "Evidence collected for specific subtasks this turn"
+    }
+  }
+}

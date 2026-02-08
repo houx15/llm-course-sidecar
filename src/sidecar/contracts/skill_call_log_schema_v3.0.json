@@ -1,0 +1,146 @@
+{
+  "$defs": {
+    "SkillInputs": {
+      "description": "Structured inputs for skill invocation.",
+      "properties": {
+        "files_read": {
+          "description": "List of files read during skill execution",
+          "items": {
+            "type": "string"
+          },
+          "title": "Files Read",
+          "type": "array"
+        },
+        "parameters": {
+          "additionalProperties": true,
+          "description": "Parameters passed to the skill",
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "title": "SkillInputs",
+      "type": "object"
+    },
+    "SkillOutputs": {
+      "description": "Structured outputs from skill invocation.",
+      "properties": {
+        "files_written": {
+          "description": "List of files written during skill execution",
+          "items": {
+            "type": "string"
+          },
+          "title": "Files Written",
+          "type": "array"
+        }
+      },
+      "title": "SkillOutputs",
+      "type": "object"
+    }
+  },
+  "description": "Log entry for a single skill invocation.",
+  "properties": {
+    "timestamp": {
+      "description": "ISO 8601 timestamp of skill invocation",
+      "title": "Timestamp",
+      "type": "string"
+    },
+    "expert_id": {
+      "title": "Expert Id",
+      "type": "string"
+    },
+    "consultation_id": {
+      "title": "Consultation Id",
+      "type": "string"
+    },
+    "user_turn_index": {
+      "minimum": 0,
+      "title": "User Turn Index",
+      "type": "integer"
+    },
+    "round_index": {
+      "maximum": 10,
+      "minimum": 1,
+      "title": "Round Index",
+      "type": "integer"
+    },
+    "skill_name": {
+      "pattern": "^[a-z][a-z0-9_\\-]{1,63}$",
+      "title": "Skill Name",
+      "type": "string"
+    },
+    "cwd": {
+      "description": "Working directory during skill execution",
+      "minLength": 1,
+      "title": "Cwd",
+      "type": "string"
+    },
+    "inputs": {
+      "$ref": "#/$defs/SkillInputs"
+    },
+    "outputs": {
+      "$ref": "#/$defs/SkillOutputs"
+    },
+    "stdout_stderr_paths": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "description": "Paths to stdout/stderr logs",
+      "title": "Stdout Stderr Paths",
+      "type": "object"
+    },
+    "execution_time_ms": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Execution time in milliseconds",
+      "title": "Execution Time Ms"
+    },
+    "success": {
+      "default": true,
+      "description": "Whether skill execution succeeded",
+      "title": "Success",
+      "type": "boolean"
+    },
+    "error_message": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Error message if execution failed",
+      "title": "Error Message"
+    }
+  },
+  "required": [
+    "timestamp",
+    "expert_id",
+    "consultation_id",
+    "user_turn_index",
+    "round_index",
+    "skill_name",
+    "cwd",
+    "inputs",
+    "outputs"
+  ],
+  "title": "Skill Call Log (Expert Skill Invocation Audit)",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

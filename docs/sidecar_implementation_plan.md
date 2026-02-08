@@ -38,7 +38,7 @@ Desktop calls local sidecar under `/api/session/*`.
 Must support:
 - `POST /api/session/new`
 - `POST /api/session/{session_id}/message/stream` (SSE)
-- `GET /api/session/{session_id}/dynamic-report`
+- `GET /api/session/{session_id}/dynamic_report`
 - `POST /api/session/{session_id}/end`
 - `GET /health`
 
@@ -55,6 +55,60 @@ SSE event baseline:
 Desktop normalization remains:
 - `complete -> done`
 - consultation events -> `expert_consultation`
+
+## Demo API Parity Audit (2026-02-08)
+
+Current `demo/app/server/main.py` exposes more than the minimal session APIs.
+
+Endpoints present in demo:
+- Session core:
+  - `POST /api/session/new`
+  - `POST /api/session/{session_id}/message/stream`
+  - `GET /api/session/{session_id}/dynamic_report`
+  - `GET /api/session/{session_id}/state`
+  - `POST /api/session/{session_id}/end`
+  - `GET /api/sessions`
+  - `GET /api/session/{session_id}/history`
+- Session files:
+  - `POST /api/session/{session_id}/upload`
+  - `GET /api/session/{session_id}/files`
+  - `DELETE /api/session/{session_id}/files/{filename}`
+- Curriculum browsing:
+  - `GET /api/courses`
+  - `GET /api/courses/{course_id}/chapters`
+  - `GET /api/chapters`
+
+Plan adjustment:
+- Keep strict compatibility for all session endpoints and SSE event types.
+- Keep file upload/list/delete endpoints in sidecar v1 (needed by expert/data workflows).
+- Curriculum browsing endpoints can be optional compatibility endpoints because desktop course/chapter metadata comes from backend.
+
+## Critical Compatibility Adjustments
+
+1. Create session payload extension:
+- Demo currently only defines `chapter_id`.
+- Desktop already sends `desktop_context` (bundle paths + prompt candidates).
+- Sidecar v1 must support:
+  - `chapter_id` (required)
+  - `desktop_context` (optional, backward-compatible)
+
+2. Bundle path resolution order:
+- To support desktop-downloaded chapter bundles, sidecar must resolve content in this order:
+  1. `desktop_context.bundle_paths.chapter_bundle_path` and related bundle paths
+  2. environment overrides (`CURRICULUM_DIR`, `EXPERTS_DIR`, `MAIN_AGENTS_DIR`)
+  3. demo-style local repo paths (dev fallback only)
+
+3. Prompt source alignment:
+- Keep demo behavior: chapter-local files first.
+- Keep current split support: fallback to global main-agent prompts for:
+  - `interaction_protocol.md`
+  - `socratic_vs_direct.md`
+
+4. Stream error event consistency:
+- Demo can emit a non-typed error line on early validation failures.
+- Sidecar v1 should always emit structured error events:
+  - `{"type":"error","message":"..."}`
+- Maintain existing event names otherwise for desktop compatibility.
 
 ## Runtime Isolation Model
 
@@ -115,15 +169,27 @@ Manifest minimum:
 
 ## Phased Execution
 
+## Phase 1 Progress (current)
+
+- [x] Sidecar repo scaffold (`pyproject.toml`, `src/sidecar` package, docs baseline)
+- [x] Demo server core copied into `src/sidecar` for strict behavior alignment
+- [x] Session API parity endpoints available (including file APIs and `dynamic_report`)
+- [x] `create_session` supports optional `desktop_context`
+- [x] Initial bundle-path runtime resolver implemented (chapter bundle -> curriculum overlay)
+- [ ] Replace remaining demo-local path assumptions (`.metadata`, legacy fallbacks) with bundle-aware resolvers
+- [ ] Add test cases for desktop bundle path loading and API parity
+
 ## Phase 1 - Contract Freeze and Extraction
 
 Deliverables:
 - copy and refactor core logic from `demo/app/server/*` into this repo
 - frozen API + event contract doc
 - request/response schema definitions
+- adapter for `desktop_context` and bundle-path based content loading
 
 Exit criteria:
 - desktop can run one end-to-end message turn using new sidecar repo in dev mode
+- desktop chapter bundle content is actually used (not only demo local paths)
 
 ## Phase 2 - Execution Runtime Hardening
 
