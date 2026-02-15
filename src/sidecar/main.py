@@ -6,7 +6,7 @@ import os
 import shutil
 import hashlib
 from dataclasses import dataclass
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from .services.orchestrator import Orchestrator, OrchestratorError
-from .services.storage import Storage
+from .services.storage import Storage, StorageError
 from .services.user_code_runner import UserCodeRunner
 from .services.code_execution_manager import CodeExecutionManager
 from .services.notebook_manager import NotebookManager
@@ -23,8 +23,7 @@ from .config import settings
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Multi-Agent Tutor System",
     description="A multi-agent teaching assistant system with Socratic questioning",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 # Configure CORS
@@ -46,9 +45,15 @@ app.add_middleware(
 
 # Resolve project root to avoid cwd-dependent path issues
 project_root = Path(__file__).resolve().parents[2]
-sessions_root = Path(os.getenv("SESSIONS_DIR", str(project_root / "sessions"))).resolve()
-default_curriculum_dir = Path(os.getenv("CURRICULUM_DIR", str(project_root / "curriculum"))).resolve()
-default_experts_dir = Path(os.getenv("EXPERTS_DIR", str(project_root / "experts"))).resolve()
+sessions_root = Path(
+    os.getenv("SESSIONS_DIR", str(project_root / "sessions"))
+).resolve()
+default_curriculum_dir = Path(
+    os.getenv("CURRICULUM_DIR", str(project_root / "curriculum"))
+).resolve()
+default_experts_dir = Path(
+    os.getenv("EXPERTS_DIR", str(project_root / "experts"))
+).resolve()
 default_main_agents_dir = Path(
     os.getenv("MAIN_AGENTS_DIR", str(project_root / "content" / "agents"))
 ).resolve()
@@ -79,7 +84,9 @@ class ChapterBundleLayout:
 
 
 def _sanitize_segment(value: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in str(value or ""))
+    return "".join(
+        ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in str(value or "")
+    )
 
 
 def _validate_chapter_segment(segment: str, field_name: str) -> str:
@@ -89,9 +96,13 @@ def _validate_chapter_segment(segment: str, field_name: str) -> str:
     if value in {".", ".."}:
         raise ValueError(f"invalid chapter_id: {field_name} cannot be '.' or '..'")
     if "/" in value or "\\" in value:
-        raise ValueError(f"invalid chapter_id: {field_name} cannot contain path separators")
+        raise ValueError(
+            f"invalid chapter_id: {field_name} cannot contain path separators"
+        )
     if _sanitize_segment(value) != value:
-        raise ValueError(f"invalid chapter_id: {field_name} contains unsupported characters")
+        raise ValueError(
+            f"invalid chapter_id: {field_name} contains unsupported characters"
+        )
     return value
 
 
@@ -110,7 +121,9 @@ def _exists(path: Optional[Path]) -> bool:
     return bool(path and path.exists())
 
 
-def _build_orchestrator(curriculum_dir: Path, experts_dir: Path, main_agents_dir: Optional[Path]) -> Orchestrator:
+def _build_orchestrator(
+    curriculum_dir: Path, experts_dir: Path, main_agents_dir: Optional[Path]
+) -> Orchestrator:
     return Orchestrator(
         storage=Storage(base_dir=str(sessions_root)),
         curriculum_dir=str(curriculum_dir),
@@ -163,7 +176,13 @@ def _resolve_chapter_bundle_layout(
         candidates.extend(
             [
                 bundle_root / "courses" / course_id / "chapters" / chapter_name,
-                bundle_root / "content" / "curriculum" / "courses" / course_id / "chapters" / chapter_name,
+                bundle_root
+                / "content"
+                / "curriculum"
+                / "courses"
+                / course_id
+                / "chapters"
+                / chapter_name,
                 bundle_root / "content" / "curriculum" / course_id / chapter_name,
             ]
         )
@@ -180,26 +199,50 @@ def _resolve_chapter_bundle_layout(
         if not candidate.exists() or not candidate.is_dir():
             continue
         prompts_dir = candidate / "prompts"
-        if prompts_dir.is_dir() and all((prompts_dir / name).exists() for name in required):
+        if prompts_dir.is_dir() and all(
+            (prompts_dir / name).exists() for name in required
+        ):
             return ChapterBundleLayout(
                 chapter_root=candidate,
                 prompts_dir=prompts_dir,
-                scripts_dir=(candidate / "scripts") if (candidate / "scripts").is_dir() else None,
-                datasets_dir=(candidate / "datasets") if (candidate / "datasets").is_dir() else None,
-                assets_dir=(candidate / "assets") if (candidate / "assets").is_dir() else None,
+                scripts_dir=(
+                    (candidate / "scripts")
+                    if (candidate / "scripts").is_dir()
+                    else None
+                ),
+                datasets_dir=(
+                    (candidate / "datasets")
+                    if (candidate / "datasets").is_dir()
+                    else None
+                ),
+                assets_dir=(
+                    (candidate / "assets") if (candidate / "assets").is_dir() else None
+                ),
             )
         if all((candidate / name).exists() for name in required):
             return ChapterBundleLayout(
                 chapter_root=candidate,
                 prompts_dir=candidate,
-                scripts_dir=(candidate / "scripts") if (candidate / "scripts").is_dir() else None,
-                datasets_dir=(candidate / "datasets") if (candidate / "datasets").is_dir() else None,
-                assets_dir=(candidate / "assets") if (candidate / "assets").is_dir() else None,
+                scripts_dir=(
+                    (candidate / "scripts")
+                    if (candidate / "scripts").is_dir()
+                    else None
+                ),
+                datasets_dir=(
+                    (candidate / "datasets")
+                    if (candidate / "datasets").is_dir()
+                    else None
+                ),
+                assets_dir=(
+                    (candidate / "assets") if (candidate / "assets").is_dir() else None
+                ),
             )
     return None
 
 
-def _find_chapter_dir_in_bundle(bundle_root: Path, course_id: str, chapter_name: str) -> Optional[Path]:
+def _find_chapter_dir_in_bundle(
+    bundle_root: Path, course_id: str, chapter_name: str
+) -> Optional[Path]:
     """
     Resolve prompt directory inside a chapter bundle.
 
@@ -227,7 +270,9 @@ def _ensure_overlay_templates(curriculum_root: Path) -> None:
         return
 
 
-def _compute_overlay_fingerprint(bundle_root: Path, bundle_layout: ChapterBundleLayout) -> str:
+def _compute_overlay_fingerprint(
+    bundle_root: Path, bundle_layout: ChapterBundleLayout
+) -> str:
     """
     Build a stable fingerprint for overlay isolation.
 
@@ -270,7 +315,9 @@ def _compute_overlay_fingerprint(bundle_root: Path, bundle_layout: ChapterBundle
     return digest.hexdigest()[:12]
 
 
-def _resolve_curriculum_dir(chapter_id: str, desktop_context: Optional[Dict[str, Any]]) -> Path:
+def _resolve_curriculum_dir(
+    chapter_id: str, desktop_context: Optional[Dict[str, Any]]
+) -> Path:
     bundle_paths = (desktop_context or {}).get("bundle_paths") or {}
     chapter_bundle_path = str(bundle_paths.get("chapter_bundle_path") or "").strip()
 
@@ -281,20 +328,33 @@ def _resolve_curriculum_dir(chapter_id: str, desktop_context: Optional[Dict[str,
     course_id, chapter_name = _split_chapter_id(chapter_id)
     bundle_layout = _resolve_chapter_bundle_layout(bundle_root, course_id, chapter_name)
     if not bundle_layout:
-        logger.warning(f"desktop_context chapter bundle path is set but no chapter files found: {chapter_bundle_path}")
+        logger.warning(
+            f"desktop_context chapter bundle path is set but no chapter files found: {chapter_bundle_path}"
+        )
         return default_curriculum_dir
 
     fingerprint = _compute_overlay_fingerprint(bundle_root, bundle_layout)
     overlay_id = "__".join(
-        filter(None, [_sanitize_segment(course_id) or "legacy", _sanitize_segment(chapter_name), fingerprint])
+        filter(
+            None,
+            [
+                _sanitize_segment(course_id) or "legacy",
+                _sanitize_segment(chapter_name),
+                fingerprint,
+            ],
+        )
     )
     overlay_curriculum_root = (overlay_root / overlay_id).resolve()
     if course_id:
-        chapter_target = (overlay_curriculum_root / "courses" / course_id / "chapters" / chapter_name).resolve()
+        chapter_target = (
+            overlay_curriculum_root / "courses" / course_id / "chapters" / chapter_name
+        ).resolve()
     else:
         chapter_target = (overlay_curriculum_root / "chapters" / chapter_name).resolve()
     if not chapter_target.is_relative_to(overlay_curriculum_root):
-        raise ValueError("invalid chapter_id: resolved chapter path escapes overlay root")
+        raise ValueError(
+            "invalid chapter_id: resolved chapter path escapes overlay root"
+        )
     if chapter_target.exists():
         shutil.rmtree(chapter_target)
     chapter_target.mkdir(parents=True, exist_ok=True)
@@ -316,7 +376,9 @@ def _resolve_curriculum_dir(chapter_id: str, desktop_context: Optional[Dict[str,
     return overlay_curriculum_root
 
 
-def _resolve_chapter_workspace(curriculum_dir: Path, chapter_id: str) -> Dict[str, Optional[str]]:
+def _resolve_chapter_workspace(
+    curriculum_dir: Path, chapter_id: str
+) -> Dict[str, Optional[str]]:
     course_id, chapter_name = _split_chapter_id(chapter_id)
     if course_id:
         chapter_dir = curriculum_dir / "courses" / course_id / "chapters" / chapter_name
@@ -337,11 +399,78 @@ def _resolve_chapter_workspace(curriculum_dir: Path, chapter_id: str) -> Dict[st
     }
 
 
-def _resolve_runtime_paths(chapter_id: str, desktop_context: Optional[Dict[str, Any]]) -> tuple[Path, Path, Path]:
+def _resolve_runtime_paths(
+    chapter_id: str, desktop_context: Optional[Dict[str, Any]]
+) -> tuple[Path, Path, Path]:
     curriculum_dir = _resolve_curriculum_dir(chapter_id, desktop_context)
     experts_dir = _resolve_experts_dir(desktop_context)
     main_agents_dir = _resolve_main_agents_dir(desktop_context)
     return curriculum_dir, experts_dir, main_agents_dir
+
+
+def _copy_chapter_bundle_assets(
+    *,
+    session_id: str,
+    chapter_id: str,
+    desktop_context: Optional[Dict[str, Any]],
+    storage: Any,
+) -> Dict[str, Any]:
+    """Copy chapter bundle scripts/datasets into session directories."""
+    workspace_info: Dict[str, Any] = {
+        "has_starter_code": False,
+        "has_datasets": False,
+        "files": [],
+    }
+
+    if not desktop_context:
+        return workspace_info
+
+    bundle_paths = desktop_context.get("bundle_paths") or {}
+    chapter_bundle_path = str(bundle_paths.get("chapter_bundle_path") or "").strip()
+    if not chapter_bundle_path:
+        return workspace_info
+    if not hasattr(storage, "get_workspace_path") or not hasattr(
+        storage, "get_working_files_path"
+    ):
+        return workspace_info
+
+    bundle_root = Path(chapter_bundle_path)
+    course_id, chapter_name = _split_chapter_id(chapter_id)
+    chapter_dir = _find_chapter_dir_in_bundle(bundle_root, course_id, chapter_name)
+    if not chapter_dir:
+        return workspace_info
+
+    workspace_dir = storage.get_workspace_path(session_id)
+    working_files_dir = storage.get_working_files_path(session_id)
+    files_added: set[str] = set()
+
+    scripts_src = chapter_dir / "scripts"
+    if scripts_src.is_dir():
+        for item in sorted(scripts_src.iterdir()):
+            if not item.is_file() or item.name == "solution.py":
+                continue
+            target = workspace_dir / item.name
+            shutil.copy2(item, target)
+            if hasattr(storage, "set_workspace_file_source"):
+                storage.set_workspace_file_source(session_id, item.name, "bundle")
+            workspace_info["has_starter_code"] = True
+            if item.name not in files_added:
+                workspace_info["files"].append({"name": item.name, "source": "bundle"})
+                files_added.add(item.name)
+
+    datasets_src = chapter_dir / "datasets"
+    if datasets_src.is_dir():
+        for item in sorted(datasets_src.iterdir()):
+            if not item.is_file():
+                continue
+            target = working_files_dir / item.name
+            shutil.copy2(item, target)
+            workspace_info["has_datasets"] = True
+            if item.name not in files_added:
+                workspace_info["files"].append({"name": item.name, "source": "bundle"})
+                files_added.add(item.name)
+
+    return workspace_info
 
 
 default_orchestrator = _build_orchestrator(
@@ -353,6 +482,7 @@ session_orchestrators: dict[str, Orchestrator] = {}
 user_code_runner = UserCodeRunner(sessions_root=sessions_root)
 code_execution_manager = CodeExecutionManager(runner=user_code_runner)
 notebook_manager = NotebookManager()
+MAX_WORKSPACE_FILE_SIZE_BYTES = 1 * 1024 * 1024
 
 
 def _get_orchestrator(session_id: str) -> Orchestrator:
@@ -394,41 +524,66 @@ class DesktopContext(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     """Request to create a new session."""
-    chapter_id: str = Field(default="ch0_pandas_basics", description="Chapter identifier")
+
+    chapter_id: str = Field(
+        default="ch0_pandas_basics", description="Chapter identifier"
+    )
     desktop_context: Optional[DesktopContext] = Field(
         default=None,
         description="Desktop-provided bundle and prompt resolution context",
     )
 
 
+class WorkspaceBundleFile(BaseModel):
+    """Workspace metadata file entry."""
+
+    name: str
+    source: str = "bundle"
+
+
+class WorkspaceSummary(BaseModel):
+    """Workspace summary in session creation response."""
+
+    has_starter_code: bool = False
+    has_datasets: bool = False
+    files: List[WorkspaceBundleFile] = Field(default_factory=list)
+
+
 class CreateSessionResponse(BaseModel):
     """Response with new session ID."""
+
     session_id: str
     initial_message: str
+    workspace: WorkspaceSummary = Field(default_factory=WorkspaceSummary)
 
 
 class SendMessageRequest(BaseModel):
     """Request to send a message."""
+
     message: str = Field(..., max_length=10000, description="User message")
 
 
 class DynamicReportResponse(BaseModel):
     """Response with dynamic report."""
+
     report: str
 
 
 class SessionStateResponse(BaseModel):
     """Response with session state."""
+
     state: dict
 
 
 class EndSessionResponse(BaseModel):
     """Response with final report."""
+
     final_report: str
 
 
 class SessionListItem(BaseModel):
     """Session list item."""
+
     session_id: str
     chapter_id: str
     turn_index: int
@@ -438,11 +593,13 @@ class SessionListItem(BaseModel):
 
 class SessionListResponse(BaseModel):
     """Response with list of sessions."""
+
     sessions: list[SessionListItem]
 
 
 class ChapterInfo(BaseModel):
     """Chapter information."""
+
     chapter_id: str
     title: str
     description: str
@@ -451,11 +608,13 @@ class ChapterInfo(BaseModel):
 
 class ChaptersListResponse(BaseModel):
     """Response with list of chapters."""
+
     chapters: list[ChapterInfo]
 
 
 class CourseInfo(BaseModel):
     """Course information."""
+
     course_id: str
     title: str
     description: str
@@ -465,11 +624,13 @@ class CourseInfo(BaseModel):
 
 class CoursesListResponse(BaseModel):
     """Response with list of courses."""
+
     courses: list[CourseInfo]
 
 
 class CourseChaptersResponse(BaseModel):
     """Response with chapters for a specific course."""
+
     course_id: str
     course_title: str
     chapters: list[ChapterInfo]
@@ -477,6 +638,7 @@ class CourseChaptersResponse(BaseModel):
 
 class UploadedFileInfo(BaseModel):
     """Uploaded file information."""
+
     filename: str
     size: int
     upload_time: float
@@ -485,23 +647,27 @@ class UploadedFileInfo(BaseModel):
 
 class UploadFilesResponse(BaseModel):
     """Response with uploaded files information."""
+
     files: list[UploadedFileInfo]
     message: str
 
 
 class FilesListResponse(BaseModel):
     """Response with list of uploaded files."""
+
     files: list[UploadedFileInfo]
 
 
 class DeleteFileResponse(BaseModel):
     """Response for file deletion."""
+
     success: bool
     message: str
 
 
 class SessionWorkspaceResponse(BaseModel):
     """Resolved chapter workspace paths for a session."""
+
     chapter_id: str
     chapter_dir: str
     scripts_dir: Optional[str] = None
@@ -510,8 +676,38 @@ class SessionWorkspaceResponse(BaseModel):
     starter_code: Optional[str] = None
 
 
+class WorkspaceFileInfo(BaseModel):
+    """User workspace file metadata."""
+
+    name: str
+    size_bytes: int
+    modified_at: str
+    source: str
+
+
+class WorkspaceFilesListResponse(BaseModel):
+    """Response with user workspace files."""
+
+    files: List[WorkspaceFileInfo]
+
+
+class WorkspaceFileReadResponse(BaseModel):
+    """Workspace file content response."""
+
+    name: str
+    content: str
+    size_bytes: int
+
+
+class WorkspaceFileWriteRequest(BaseModel):
+    """Request body for workspace file write."""
+
+    content: str
+
+
 class RunCodeRequest(BaseModel):
     """Request to run user Python code in the session workspace."""
+
     code: str = Field(..., min_length=1, max_length=20000)
     timeout_seconds: int = Field(default=20, ge=1, le=120)
     memory_limit_mb: Optional[int] = Field(default=None, ge=64, le=8192)
@@ -519,6 +715,7 @@ class RunCodeRequest(BaseModel):
 
 class RunCodeResponse(BaseModel):
     """Response for user code execution."""
+
     success: bool
     stdout: str
     stderr: str
@@ -529,6 +726,7 @@ class RunCodeResponse(BaseModel):
 
 class CreateCodeJobRequest(BaseModel):
     """Request to create an async user code execution job."""
+
     code: str = Field(..., min_length=1, max_length=20000)
     timeout_seconds: int = Field(default=20, ge=1, le=120)
     memory_limit_mb: Optional[int] = Field(default=None, ge=64, le=8192)
@@ -536,6 +734,7 @@ class CreateCodeJobRequest(BaseModel):
 
 class CodeJobSummary(BaseModel):
     """Summary for a background code execution job."""
+
     job_id: str
     session_id: str
     status: str
@@ -546,11 +745,13 @@ class CodeJobSummary(BaseModel):
 
 class CodeJobDetailResponse(CodeJobSummary):
     """Detailed response for a background code execution job."""
+
     result: Optional[RunCodeResponse] = None
 
 
 class CancelCodeJobResponse(BaseModel):
     """Response for async code job cancellation."""
+
     success: bool
     job_id: str
     status: str
@@ -558,6 +759,7 @@ class CancelCodeJobResponse(BaseModel):
 
 class ContractRoute(BaseModel):
     """Stable route contract item."""
+
     method: str
     path: str
     stability: str
@@ -566,6 +768,7 @@ class ContractRoute(BaseModel):
 
 class SidecarContractResponse(BaseModel):
     """Public sidecar API contract."""
+
     contract_version: str
     api_version: str
     routes: list[ContractRoute]
@@ -574,12 +777,14 @@ class SidecarContractResponse(BaseModel):
 
 class RunNotebookCellRequest(BaseModel):
     """Request to execute a notebook cell."""
+
     code: str = Field(..., min_length=1, max_length=20000)
     cell_id: Optional[str] = None
 
 
 class RunNotebookCellResponse(BaseModel):
     """Response for notebook cell execution."""
+
     success: bool
     stdout: str
     stderr: str
@@ -589,10 +794,12 @@ class RunNotebookCellResponse(BaseModel):
 
 class ResetNotebookResponse(BaseModel):
     """Response for notebook kernel/session reset."""
+
     success: bool
 
 
 # API Endpoints
+
 
 @app.post("/api/session/new", response_model=CreateSessionResponse)
 async def create_session(request: CreateSessionRequest):
@@ -605,8 +812,12 @@ async def create_session(request: CreateSessionRequest):
     try:
         logger.info(f"Creating new session for chapter: {request.chapter_id}")
         _split_chapter_id(request.chapter_id)  # Validate chapter_id format early.
-        desktop_context = request.desktop_context.model_dump() if request.desktop_context else None
-        curriculum_dir, experts_dir, main_agents_dir = _resolve_runtime_paths(request.chapter_id, desktop_context)
+        desktop_context = (
+            request.desktop_context.model_dump() if request.desktop_context else None
+        )
+        curriculum_dir, experts_dir, main_agents_dir = _resolve_runtime_paths(
+            request.chapter_id, desktop_context
+        )
         logger.info(
             "Resolved runtime paths: curriculum=%s experts=%s main_agents=%s",
             curriculum_dir,
@@ -621,6 +832,12 @@ async def create_session(request: CreateSessionRequest):
         )
         session_id = await orchestrator.create_session(request.chapter_id)
         session_orchestrators[session_id] = orchestrator
+        workspace_info = _copy_chapter_bundle_assets(
+            session_id=session_id,
+            chapter_id=request.chapter_id,
+            desktop_context=desktop_context,
+            storage=orchestrator.storage,
+        )
 
         # Load the initial companion message (turn 0)
         turn_history = orchestrator.storage.load_turn_history(session_id)
@@ -632,7 +849,8 @@ async def create_session(request: CreateSessionRequest):
         logger.info(f"Session created: {session_id}")
         return CreateSessionResponse(
             session_id=session_id,
-            initial_message=initial_message
+            initial_message=initial_message,
+            workspace=WorkspaceSummary.model_validate(workspace_info),
         )
 
     except OrchestratorError as e:
@@ -654,39 +872,48 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
     - Companion response (character by character)
     - Progress updates from other agents
     """
+
     async def event_generator():
         orchestrator = _get_orchestrator(session_id)
         try:
             # Validate session
             if not orchestrator.storage.session_exists(session_id):
                 import json
+
                 yield f"data: {json.dumps({'type': 'error', 'message': '会话不存在'}, ensure_ascii=False)}\n\n"
                 return
 
             # Validate message length
             if len(request.message) > settings.max_input_length:
                 import json
+
                 yield f"data: {json.dumps({'type': 'error', 'message': '消息长度超过限制'}, ensure_ascii=False)}\n\n"
                 return
 
             # Send start event
             import json
+
             yield f"data: {json.dumps({'type': 'start'}, ensure_ascii=False)}\n\n"
 
             # Process turn with streaming
-            async for event in orchestrator.process_turn_stream(session_id, request.message):
+            async for event in orchestrator.process_turn_stream(
+                session_id, request.message
+            ):
                 import json
+
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.01)  # Small delay for smooth streaming
 
             # Send complete event
             state = orchestrator.storage.load_state(session_id)
             import json
+
             yield f"data: {json.dumps({'type': 'complete', 'turn_index': state.turn_index}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
             import json
+
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -695,11 +922,13 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
-        }
+        },
     )
 
 
-@app.get("/api/session/{session_id}/dynamic_report", response_model=DynamicReportResponse)
+@app.get(
+    "/api/session/{session_id}/dynamic_report", response_model=DynamicReportResponse
+)
 async def get_dynamic_report(session_id: str):
     """
     Get the current dynamic report for a session.
@@ -800,32 +1029,32 @@ async def list_courses():
                 continue
 
             # Read course info
-            course_info_content = course_info_file.read_text(encoding='utf-8')
+            course_info_content = course_info_file.read_text(encoding="utf-8")
 
             # Extract title from first heading
             title = course_id
             description = ""
-            for line in course_info_content.split('\n'):
-                if line.startswith('# '):
+            for line in course_info_content.split("\n"):
+                if line.startswith("# "):
                     title = line[2:].strip()
                     break
 
             # Extract description (first paragraph after title)
-            lines = course_info_content.split('\n')
+            lines = course_info_content.split("\n")
             in_description = False
             description_lines = []
             for line in lines:
-                if line.startswith('## 课程简介'):
+                if line.startswith("## 课程简介"):
                     in_description = True
                     continue
                 if in_description and line.strip():
-                    if line.startswith('#'):
+                    if line.startswith("#"):
                         break
                     description_lines.append(line.strip())
                     if len(description_lines) >= 2:  # First 2 lines
                         break
 
-            description = ' '.join(description_lines)
+            description = " ".join(description_lines)
 
             # Count chapters
             chapters_dir = course_dir / "chapters"
@@ -833,13 +1062,15 @@ async def list_courses():
             if chapters_dir.exists():
                 chapter_count = len([d for d in chapters_dir.iterdir() if d.is_dir()])
 
-            courses.append(CourseInfo(
-                course_id=course_id,
-                title=title,
-                description=description,
-                chapter_count=chapter_count,
-                full_info=course_info_content
-            ))
+            courses.append(
+                CourseInfo(
+                    course_id=course_id,
+                    title=title,
+                    description=description,
+                    chapter_count=chapter_count,
+                    full_info=course_info_content,
+                )
+            )
 
         return CoursesListResponse(courses=courses)
 
@@ -864,9 +1095,9 @@ async def list_course_chapters(course_id: str):
         course_info_file = course_path / "course_info.md"
         course_title = course_id
         if course_info_file.exists():
-            course_info_content = course_info_file.read_text(encoding='utf-8')
-            for line in course_info_content.split('\n'):
-                if line.startswith('# '):
+            course_info_content = course_info_file.read_text(encoding="utf-8")
+            for line in course_info_content.split("\n"):
+                if line.startswith("# "):
                     course_title = line[2:].strip()
                     break
 
@@ -875,9 +1106,7 @@ async def list_course_chapters(course_id: str):
 
         if not chapters_path.exists():
             return CourseChaptersResponse(
-                course_id=course_id,
-                course_title=course_title,
-                chapters=[]
+                course_id=course_id, course_title=course_title, chapters=[]
             )
 
         # Iterate through chapter directories
@@ -892,44 +1121,44 @@ async def list_course_chapters(course_id: str):
                 continue
 
             # Read chapter context
-            context_content = context_file.read_text(encoding='utf-8')
+            context_content = context_file.read_text(encoding="utf-8")
 
             # Extract title from first heading
             title = chapter_dir.name
             description = ""
-            for line in context_content.split('\n'):
-                if line.startswith('# '):
+            for line in context_content.split("\n"):
+                if line.startswith("# "):
                     title = line[2:].strip()
                     break
 
             # Extract description (first paragraph after title)
-            lines = context_content.split('\n')
+            lines = context_content.split("\n")
             in_description = False
             description_lines = []
             for line in lines:
-                if line.startswith('# '):
+                if line.startswith("# "):
                     in_description = True
                     continue
                 if in_description and line.strip():
-                    if line.startswith('#'):
+                    if line.startswith("#"):
                         break
                     description_lines.append(line.strip())
                     if len(description_lines) >= 3:  # First 3 lines
                         break
 
-            description = ' '.join(description_lines)
+            description = " ".join(description_lines)
 
-            chapters.append(ChapterInfo(
-                chapter_id=chapter_id,
-                title=title,
-                description=description,
-                context=context_content
-            ))
+            chapters.append(
+                ChapterInfo(
+                    chapter_id=chapter_id,
+                    title=title,
+                    description=description,
+                    context=context_content,
+                )
+            )
 
         return CourseChaptersResponse(
-            course_id=course_id,
-            course_title=course_title,
-            chapters=chapters
+            course_id=course_id, course_title=course_title, chapters=chapters
         )
 
     except HTTPException:
@@ -964,39 +1193,41 @@ async def list_chapters():
                 continue
 
             # Read chapter context
-            context_content = context_file.read_text(encoding='utf-8')
+            context_content = context_file.read_text(encoding="utf-8")
 
             # Extract title from first heading
             title = chapter_id
             description = ""
-            for line in context_content.split('\n'):
-                if line.startswith('# '):
+            for line in context_content.split("\n"):
+                if line.startswith("# "):
                     title = line[2:].strip()
                     break
 
             # Extract description (first paragraph after title)
-            lines = context_content.split('\n')
+            lines = context_content.split("\n")
             in_description = False
             description_lines = []
             for line in lines:
-                if line.startswith('# '):
+                if line.startswith("# "):
                     in_description = True
                     continue
                 if in_description and line.strip():
-                    if line.startswith('#'):
+                    if line.startswith("#"):
                         break
                     description_lines.append(line.strip())
                     if len(description_lines) >= 3:  # First 3 lines
                         break
 
-            description = ' '.join(description_lines)
+            description = " ".join(description_lines)
 
-            chapters.append(ChapterInfo(
-                chapter_id=chapter_id,
-                title=title,
-                description=description,
-                context=context_content
-            ))
+            chapters.append(
+                ChapterInfo(
+                    chapter_id=chapter_id,
+                    title=title,
+                    description=description,
+                    context=context_content,
+                )
+            )
 
         return ChaptersListResponse(chapters=chapters)
 
@@ -1069,7 +1300,9 @@ async def get_session_workspace(session_id: str):
             raise HTTPException(status_code=404, detail="会话不存在")
 
         state = orchestrator.storage.load_state(session_id)
-        workspace = _resolve_chapter_workspace(orchestrator.curriculum_dir, state.chapter_id)
+        workspace = _resolve_chapter_workspace(
+            orchestrator.curriculum_dir, state.chapter_id
+        )
         return SessionWorkspaceResponse(chapter_id=state.chapter_id, **workspace)
 
     except HTTPException:
@@ -1100,7 +1333,7 @@ async def upload_files(session_id: str, files: List[UploadFile] = File(...)):
         if len(files) > settings.max_uploads_per_session:
             raise HTTPException(
                 status_code=400,
-                detail=f"一次最多上传 {settings.max_uploads_per_session} 个文件"
+                detail=f"一次最多上传 {settings.max_uploads_per_session} 个文件",
             )
 
         # Read all files and validate
@@ -1118,7 +1351,7 @@ async def upload_files(session_id: str, files: List[UploadFile] = File(...)):
             if file_ext not in settings.allowed_file_extensions:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"不支持的文件格式：{file_ext}。支持的格式：{', '.join(settings.allowed_file_extensions)}"
+                    detail=f"不支持的文件格式：{file_ext}。支持的格式：{', '.join(settings.allowed_file_extensions)}",
                 )
 
             # Check total size
@@ -1126,7 +1359,7 @@ async def upload_files(session_id: str, files: List[UploadFile] = File(...)):
             if total_size > max_size_bytes:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"文件总大小超过 {settings.max_upload_size_mb}MB 限制"
+                    detail=f"文件总大小超过 {settings.max_upload_size_mb}MB 限制",
                 )
 
             # Save file
@@ -1136,18 +1369,22 @@ async def upload_files(session_id: str, files: List[UploadFile] = File(...)):
 
             # Get file metadata
             stat = saved_path.stat()
-            uploaded_files_info.append(UploadedFileInfo(
-                filename=saved_path.name,
-                size=stat.st_size,
-                upload_time=stat.st_mtime,
-                file_type=saved_path.suffix
-            ))
+            uploaded_files_info.append(
+                UploadedFileInfo(
+                    filename=saved_path.name,
+                    size=stat.st_size,
+                    upload_time=stat.st_mtime,
+                    file_type=saved_path.suffix,
+                )
+            )
 
-        logger.info(f"Uploaded {len(uploaded_files_info)} files to session {session_id}")
+        logger.info(
+            f"Uploaded {len(uploaded_files_info)} files to session {session_id}"
+        )
 
         return UploadFilesResponse(
             files=uploaded_files_info,
-            message=f"成功上传 {len(uploaded_files_info)} 个文件"
+            message=f"成功上传 {len(uploaded_files_info)} 个文件",
         )
 
     except HTTPException:
@@ -1178,7 +1415,7 @@ async def list_files(session_id: str):
                 filename=f["filename"],
                 size=f["size"],
                 upload_time=f["upload_time"],
-                file_type=f["file_type"]
+                file_type=f["file_type"],
             )
             for f in files_metadata
         ]
@@ -1192,7 +1429,9 @@ async def list_files(session_id: str):
         raise HTTPException(status_code=500, detail="获取文件列表失败")
 
 
-@app.delete("/api/session/{session_id}/files/{filename}", response_model=DeleteFileResponse)
+@app.delete(
+    "/api/session/{session_id}/files/{filename}", response_model=DeleteFileResponse
+)
 async def delete_file(session_id: str, filename: str):
     """
     Delete a file from a session's working_files directory.
@@ -1210,10 +1449,7 @@ async def delete_file(session_id: str, filename: str):
 
         if deleted:
             logger.info(f"Deleted file {filename} from session {session_id}")
-            return DeleteFileResponse(
-                success=True,
-                message=f"文件 {filename} 已删除"
-            )
+            return DeleteFileResponse(success=True, message=f"文件 {filename} 已删除")
         else:
             raise HTTPException(status_code=404, detail="文件不存在")
 
@@ -1222,6 +1458,102 @@ async def delete_file(session_id: str, filename: str):
     except Exception as e:
         logger.error(f"Failed to delete file: {e}")
         raise HTTPException(status_code=500, detail="删除文件失败")
+
+
+@app.get(
+    "/api/session/{session_id}/workspace/files",
+    response_model=WorkspaceFilesListResponse,
+)
+async def list_workspace_files(session_id: str):
+    """List editable files in user_workspace."""
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    try:
+        files = orchestrator.storage.list_workspace_files(session_id)
+        return WorkspaceFilesListResponse(
+            files=[WorkspaceFileInfo(**item) for item in files]
+        )
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to list workspace files: {exc}")
+        raise HTTPException(status_code=500, detail="获取工作区文件失败") from exc
+
+
+@app.get(
+    "/api/session/{session_id}/workspace/files/{filename}",
+    response_model=WorkspaceFileReadResponse,
+)
+async def read_workspace_file(session_id: str, filename: str):
+    """Read a file from user_workspace."""
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    try:
+        content = orchestrator.storage.read_workspace_file(session_id, filename)
+        return WorkspaceFileReadResponse(
+            name=filename,
+            content=content,
+            size_bytes=len(content.encode("utf-8")),
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="文件不存在") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to read workspace file {filename}: {exc}")
+        raise HTTPException(status_code=500, detail="读取工作区文件失败") from exc
+
+
+@app.put(
+    "/api/session/{session_id}/workspace/files/{filename}",
+    response_model=WorkspaceFileInfo,
+)
+async def write_workspace_file(
+    session_id: str, filename: str, request: WorkspaceFileWriteRequest
+):
+    """Write or overwrite a file in user_workspace."""
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    content_bytes = request.content.encode("utf-8")
+    if len(content_bytes) > MAX_WORKSPACE_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="文件内容超过 1MB 限制")
+
+    try:
+        metadata = orchestrator.storage.write_workspace_file(
+            session_id, filename, request.content
+        )
+        return WorkspaceFileInfo(**metadata)
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to write workspace file {filename}: {exc}")
+        raise HTTPException(status_code=500, detail="写入工作区文件失败") from exc
+
+
+@app.delete("/api/session/{session_id}/workspace/files/{filename}", status_code=204)
+async def delete_workspace_file(session_id: str, filename: str):
+    """Delete a file from user_workspace."""
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    try:
+        orchestrator.storage.delete_workspace_file(session_id, filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="文件不存在") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to delete workspace file {filename}: {exc}")
+        raise HTTPException(status_code=500, detail="删除工作区文件失败") from exc
+
+    return Response(status_code=204)
 
 
 @app.post("/api/session/{session_id}/code/run", response_model=RunCodeResponse)
@@ -1263,7 +1595,9 @@ async def create_code_job(session_id: str, request: CreateCodeJobRequest):
     return _build_code_job_summary(job)
 
 
-@app.get("/api/session/{session_id}/code/jobs/{job_id}", response_model=CodeJobDetailResponse)
+@app.get(
+    "/api/session/{session_id}/code/jobs/{job_id}", response_model=CodeJobDetailResponse
+)
 async def get_code_job(session_id: str, job_id: str):
     """
     Get asynchronous user-code execution job status.
@@ -1278,7 +1612,10 @@ async def get_code_job(session_id: str, job_id: str):
     return _build_code_job_detail(job)
 
 
-@app.post("/api/session/{session_id}/code/jobs/{job_id}/cancel", response_model=CancelCodeJobResponse)
+@app.post(
+    "/api/session/{session_id}/code/jobs/{job_id}/cancel",
+    response_model=CancelCodeJobResponse,
+)
 async def cancel_code_job(session_id: str, job_id: str):
     """
     Cancel asynchronous user-code execution job.
@@ -1298,7 +1635,10 @@ async def cancel_code_job(session_id: str, job_id: str):
     return CancelCodeJobResponse(success=True, job_id=job_id, status=updated.status)
 
 
-@app.post("/api/session/{session_id}/notebook/cell/run", response_model=RunNotebookCellResponse)
+@app.post(
+    "/api/session/{session_id}/notebook/cell/run",
+    response_model=RunNotebookCellResponse,
+)
 async def run_notebook_cell(session_id: str, request: RunNotebookCellRequest):
     """
     Execute a notebook-style code cell with per-session state persistence.
@@ -1311,7 +1651,9 @@ async def run_notebook_cell(session_id: str, request: RunNotebookCellRequest):
     return RunNotebookCellResponse(**result)
 
 
-@app.post("/api/session/{session_id}/notebook/reset", response_model=ResetNotebookResponse)
+@app.post(
+    "/api/session/{session_id}/notebook/reset", response_model=ResetNotebookResponse
+)
 async def reset_notebook_session(session_id: str):
     """
     Reset notebook session state (kernel-like reset).
@@ -1330,7 +1672,12 @@ async def get_sidecar_contract():
     Return frozen v1 sidecar API and streaming contract.
     """
     routes = [
-        ContractRoute(method="POST", path="/api/session/new", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="POST",
+            path="/api/session/new",
+            stability="stable",
+            source="demo_parity",
+        ),
         ContractRoute(
             method="POST",
             path="/api/session/{session_id}/message/stream",
@@ -1343,9 +1690,21 @@ async def get_sidecar_contract():
             stability="stable",
             source="demo_parity",
         ),
-        ContractRoute(method="GET", path="/api/session/{session_id}/state", stability="stable", source="demo_parity"),
-        ContractRoute(method="POST", path="/api/session/{session_id}/end", stability="stable", source="demo_parity"),
-        ContractRoute(method="GET", path="/api/sessions", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/state",
+            stability="stable",
+            source="demo_parity",
+        ),
+        ContractRoute(
+            method="POST",
+            path="/api/session/{session_id}/end",
+            stability="stable",
+            source="demo_parity",
+        ),
+        ContractRoute(
+            method="GET", path="/api/sessions", stability="stable", source="demo_parity"
+        ),
         ContractRoute(
             method="GET",
             path="/api/session/{session_id}/history",
@@ -1364,21 +1723,54 @@ async def get_sidecar_contract():
             stability="stable",
             source="demo_parity",
         ),
-        ContractRoute(method="GET", path="/api/session/{session_id}/files", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/files",
+            stability="stable",
+            source="demo_parity",
+        ),
         ContractRoute(
             method="DELETE",
             path="/api/session/{session_id}/files/{filename}",
             stability="stable",
             source="demo_parity",
         ),
-        ContractRoute(method="GET", path="/api/courses", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/workspace/files",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/workspace/files/{filename}",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="PUT",
+            path="/api/session/{session_id}/workspace/files/{filename}",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="DELETE",
+            path="/api/session/{session_id}/workspace/files/{filename}",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="GET", path="/api/courses", stability="stable", source="demo_parity"
+        ),
         ContractRoute(
             method="GET",
             path="/api/courses/{course_id}/chapters",
             stability="stable",
             source="demo_parity",
         ),
-        ContractRoute(method="GET", path="/api/chapters", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="GET", path="/api/chapters", stability="stable", source="demo_parity"
+        ),
         ContractRoute(
             method="POST",
             path="/api/session/{session_id}/code/run",
@@ -1415,8 +1807,15 @@ async def get_sidecar_contract():
             stability="stable",
             source="sidecar_extension",
         ),
-        ContractRoute(method="GET", path="/api/contract", stability="stable", source="sidecar_extension"),
-        ContractRoute(method="GET", path="/health", stability="stable", source="demo_parity"),
+        ContractRoute(
+            method="GET",
+            path="/api/contract",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="GET", path="/health", stability="stable", source="demo_parity"
+        ),
     ]
     sse_event_types = [
         "start",
@@ -1452,19 +1851,21 @@ if web_dir.exists():
                 headers={
                     "Cache-Control": "no-cache, no-store, must-revalidate",
                     "Pragma": "no-cache",
-                    "Expires": "0"
-                }
+                    "Expires": "0",
+                },
             )
         else:
             return {"message": "Frontend not found. Please create app/web/index.html"}
+
 else:
+
     @app.get("/")
     async def root():
         """Root endpoint when frontend is not available."""
         return {
             "message": "Multi-Agent Tutor System API",
             "version": "1.0.0",
-            "docs": "/docs"
+            "docs": "/docs",
         }
 
 
@@ -1477,4 +1878,5 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host=settings.host, port=settings.port)

@@ -174,6 +174,7 @@ class AgentRunner:
         memory_recent_turns: str,
         available_experts_info: str = "",  # v3.2.0: Expert information
         uploaded_files_info: str = "",  # v3.2.0: Uploaded files information
+        recent_code_executions: str = "",  # v3.3.0: Recent code execution context
         expert_output_summary: Optional[str] = None,  # v3.2.0: Expert consultation results
     ) -> Tuple[str, TurnOutcome]:
         """
@@ -201,6 +202,7 @@ class AgentRunner:
             "USER_MESSAGE": user_message,
             "AVAILABLE_EXPERTS_INFO": available_experts_info,  # v3.2.0
             "UPLOADED_FILES_INFO": uploaded_files_info,  # v3.2.0
+            "RECENT_CODE_EXECUTIONS": recent_code_executions,  # v3.3.0
             "EXPERT_OUTPUT_SUMMARY": expert_output_summary or "",  # v3.2.0
         }
         prompt = self._inject_context(template, context)

@@ -3,7 +3,9 @@
 import logging
 import uuid
 import asyncio
+import math
 import os
+import time
 from pathlib import Path
 from typing import Dict, Optional, List, Any
 
@@ -358,6 +360,61 @@ class Orchestrator:
             lines.append("")
 
         return "\n".join(lines)
+
+    def _format_recent_code_executions_for_ca(self, executions: List[Dict[str, Any]]) -> str:
+        """Format recent code executions for CA prompt injection."""
+        if not executions:
+            return ""
+
+        def _clip_text(value: Any, limit: int) -> str:
+            text = str(value or "")
+            if len(text) <= limit:
+                return text
+            return text[:limit] + "\n...[truncated]..."
+
+        now = time.time()
+        lines = ["## 学生最近的代码执行", ""]
+        for idx, record in enumerate(executions, 1):
+            try:
+                timestamp = float(record.get("timestamp", now))
+                if not math.isfinite(timestamp):
+                    raise ValueError("timestamp is not finite")
+            except (TypeError, ValueError):
+                logger.warning("Skipping malformed code history record with invalid timestamp: %s", record)
+                continue
+            try:
+                age_seconds = max(0, int(now - timestamp))
+            except (TypeError, ValueError, OverflowError):
+                logger.warning("Skipping malformed code history record with unbounded age: %s", record)
+                continue
+            if age_seconds < 60:
+                age_label = f"{age_seconds} 秒前"
+            else:
+                age_label = f"{max(1, age_seconds // 60)} 分钟前"
+
+            try:
+                exit_code = int(record.get("exit_code", 0))
+            except (TypeError, ValueError):
+                logger.warning("Skipping malformed code history record with invalid exit_code: %s", record)
+                continue
+
+            code = _clip_text(record.get("code"), 1000).strip()
+            stdout = _clip_text(record.get("stdout"), 800).strip()
+            stderr = _clip_text(record.get("stderr"), 800).strip()
+            status = "成功" if exit_code == 0 else "失败"
+            output = stdout if stdout else stderr if stderr else "(无输出)"
+
+            lines.append(f"### 执行 {idx} ({age_label})")
+            lines.append("```python")
+            lines.append(code or "# 无代码")
+            lines.append("```")
+            lines.append(f"**输出:** ({status})")
+            lines.append("```")
+            lines.append(output)
+            lines.append("```")
+            lines.append("")
+
+        return "\n".join(lines) if len(lines) > 2 else ""
 
     def _load_consultation_guide_text(self, chapter_id: str) -> str:
         """
@@ -740,6 +797,10 @@ class Orchestrator:
                 session_id=session_id,
                 user_message_length=len(user_message),
             )
+            recent_code_executions = self.storage.get_recent_code_executions(session_id, limit=3)
+            recent_code_executions_text = self._format_recent_code_executions_for_ca(
+                recent_code_executions
+            )
 
             chapter_content = self._load_chapter_content(state.chapter_id)
             templates = self._load_templates()
@@ -796,6 +857,7 @@ class Orchestrator:
                     memory_recent_turns=memory_sections["recent_turns"],
                     available_experts_info=available_experts_info,  # v3.2.0: Pass expert info
                     uploaded_files_info=uploaded_files_info_text,  # v3.2.0: Pass uploaded files info
+                    recent_code_executions=recent_code_executions_text,  # v3.3.0
                 )
                 perf_tracker.end_operation(success=True)
 
@@ -978,6 +1040,7 @@ class Orchestrator:
                             memory_recent_turns=memory_sections["recent_turns"],
                             available_experts_info=available_experts_info,
                             uploaded_files_info=uploaded_files_info_text,
+                            recent_code_executions=recent_code_executions_text,
                         )
                         turn_outcome = final_turn_outcome
                         perf_tracker.end_operation(success=True)
@@ -1316,6 +1379,10 @@ class Orchestrator:
         templates = self._load_templates()
         available_experts_info = self._load_available_experts_info(state.chapter_id)
         consultation_guide_text = self._load_consultation_guide_text(state.chapter_id)
+        recent_code_executions = self.storage.get_recent_code_executions(session_id, limit=3)
+        recent_code_executions_text = self._format_recent_code_executions_for_ca(
+            recent_code_executions
+        )
         last_turn_time = self.storage.get_last_turn_timestamp(session_id)
         uploaded_files_metadata = self.storage.get_uploaded_files_metadata(session_id)
         uploaded_files_info_text = self._format_uploaded_files_for_ca(
@@ -1354,6 +1421,7 @@ class Orchestrator:
             templates=templates,
             available_experts_info=available_experts_info,
             uploaded_files_info_text=uploaded_files_info_text,
+            recent_code_executions_text=recent_code_executions_text,
             consultation_guide_text=consultation_guide_text,
             uploaded_files_info=uploaded_files_info,
             consultation_engine=self.consultation_engine,
