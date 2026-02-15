@@ -138,6 +138,9 @@
 ### 已上传文件
 {{UPLOADED_FILES_INFO}}
 
+### 学生最近的代码执行
+{{RECENT_CODE_EXECUTIONS}}
+
 **重要提示**：
 - 如果你看到标记为🆕的新上传文件，请根据本章可用专家的能力判断是否需要咨询专家
 - 如果本章配备了处理文件的专家（如data_inspector），且用户上传了新文件，你应该在TurnOutcome中设置`expert_consultation_needed=true`

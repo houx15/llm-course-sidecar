@@ -4,7 +4,7 @@ import logging
 import asyncio
 import os
 import shutil
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from .services.orchestrator import Orchestrator, OrchestratorError
-from .services.storage import Storage
+from .services.storage import Storage, StorageError
 from .services.user_code_runner import UserCodeRunner
 from .services.code_execution_manager import CodeExecutionManager
 from .services.notebook_manager import NotebookManager
@@ -203,6 +203,74 @@ def _resolve_runtime_paths(chapter_id: str, desktop_context: Optional[Dict[str, 
     return curriculum_dir, experts_dir, main_agents_dir
 
 
+def _copy_chapter_bundle_assets(
+    *,
+    session_id: str,
+    chapter_id: str,
+    desktop_context: Optional[Dict[str, Any]],
+    storage: Any,
+) -> Dict[str, Any]:
+    """Copy chapter bundle scripts/datasets into session directories."""
+    workspace_info: Dict[str, Any] = {
+        "has_starter_code": False,
+        "has_datasets": False,
+        "files": [],
+    }
+
+    if not desktop_context:
+        return workspace_info
+
+    bundle_paths = desktop_context.get("bundle_paths") or {}
+    chapter_bundle_path = str(bundle_paths.get("chapter_bundle_path") or "").strip()
+    if not chapter_bundle_path:
+        return workspace_info
+    if not hasattr(storage, "get_workspace_path") or not hasattr(storage, "get_working_files_path"):
+        return workspace_info
+
+    bundle_root = Path(chapter_bundle_path)
+    course_id, chapter_name = _split_chapter_id(chapter_id)
+    chapter_dir = _find_chapter_dir_in_bundle(bundle_root, course_id, chapter_name)
+    if not chapter_dir:
+        return workspace_info
+
+    workspace_dir = storage.get_workspace_path(session_id)
+    working_files_dir = storage.get_working_files_path(session_id)
+    allowed_workspace_extensions = set(
+        getattr(storage, "WORKSPACE_ALLOWED_EXTENSIONS", {".py", ".ipynb", ".txt", ".md"})
+    )
+    files_added: set[str] = set()
+
+    scripts_src = chapter_dir / "scripts"
+    if scripts_src.is_dir():
+        for item in sorted(scripts_src.iterdir()):
+            if not item.is_file() or item.name == "solution.py":
+                continue
+            if item.suffix.lower() not in allowed_workspace_extensions:
+                continue
+            target = workspace_dir / item.name
+            shutil.copy2(item, target)
+            if hasattr(storage, "set_workspace_file_source"):
+                storage.set_workspace_file_source(session_id, item.name, "bundle")
+            workspace_info["has_starter_code"] = True
+            if item.name not in files_added:
+                workspace_info["files"].append({"name": item.name, "source": "bundle"})
+                files_added.add(item.name)
+
+    datasets_src = chapter_dir / "datasets"
+    if datasets_src.is_dir():
+        for item in sorted(datasets_src.iterdir()):
+            if not item.is_file():
+                continue
+            target = working_files_dir / item.name
+            shutil.copy2(item, target)
+            workspace_info["has_datasets"] = True
+            if item.name not in files_added:
+                workspace_info["files"].append({"name": item.name, "source": "bundle"})
+                files_added.add(item.name)
+
+    return workspace_info
+
+
 default_orchestrator = _build_orchestrator(
     curriculum_dir=default_curriculum_dir,
     experts_dir=default_experts_dir,
@@ -212,6 +280,7 @@ session_orchestrators: dict[str, Orchestrator] = {}
 user_code_runner = UserCodeRunner(sessions_root=sessions_root)
 code_execution_manager = CodeExecutionManager(runner=user_code_runner)
 notebook_manager = NotebookManager()
+MAX_WORKSPACE_FILE_SIZE_BYTES = 1 * 1024 * 1024
 
 
 def _get_orchestrator(session_id: str) -> Orchestrator:
@@ -260,10 +329,24 @@ class CreateSessionRequest(BaseModel):
     )
 
 
+class WorkspaceBundleFile(BaseModel):
+    """Workspace metadata file entry."""
+    name: str
+    source: str = "bundle"
+
+
+class WorkspaceSummary(BaseModel):
+    """Workspace summary in session creation response."""
+    has_starter_code: bool = False
+    has_datasets: bool = False
+    files: List[WorkspaceBundleFile] = Field(default_factory=list)
+
+
 class CreateSessionResponse(BaseModel):
     """Response with new session ID."""
     session_id: str
     initial_message: str
+    workspace: WorkspaceSummary = Field(default_factory=WorkspaceSummary)
 
 
 class SendMessageRequest(BaseModel):
@@ -357,6 +440,31 @@ class DeleteFileResponse(BaseModel):
     """Response for file deletion."""
     success: bool
     message: str
+
+
+class WorkspaceFileInfo(BaseModel):
+    """User workspace file metadata."""
+    name: str
+    size_bytes: int
+    modified_at: str
+    source: str
+
+
+class WorkspaceFilesListResponse(BaseModel):
+    """Response with user workspace files."""
+    files: List[WorkspaceFileInfo]
+
+
+class WorkspaceFileReadResponse(BaseModel):
+    """Workspace file content response."""
+    name: str
+    content: str
+    size_bytes: int
+
+
+class WorkspaceFileWriteRequest(BaseModel):
+    """Request body for workspace file write."""
+    content: str
 
 
 class RunCodeRequest(BaseModel):
@@ -469,6 +577,12 @@ async def create_session(request: CreateSessionRequest):
         )
         session_id = await orchestrator.create_session(request.chapter_id)
         session_orchestrators[session_id] = orchestrator
+        workspace_info = _copy_chapter_bundle_assets(
+            session_id=session_id,
+            chapter_id=request.chapter_id,
+            desktop_context=desktop_context,
+            storage=orchestrator.storage,
+        )
 
         # Load the initial companion message (turn 0)
         turn_history = orchestrator.storage.load_turn_history(session_id)
@@ -480,7 +594,8 @@ async def create_session(request: CreateSessionRequest):
         logger.info(f"Session created: {session_id}")
         return CreateSessionResponse(
             session_id=session_id,
-            initial_message=initial_message
+            initial_message=initial_message,
+            workspace=WorkspaceSummary.model_validate(workspace_info),
         )
 
     except OrchestratorError as e:
@@ -1049,6 +1164,89 @@ async def delete_file(session_id: str, filename: str):
         raise HTTPException(status_code=500, detail="删除文件失败")
 
 
+@app.get("/api/session/{session_id}/workspace/files", response_model=WorkspaceFilesListResponse)
+async def list_workspace_files(session_id: str):
+    """List editable files in user_workspace."""
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    try:
+        files = orchestrator.storage.list_workspace_files(session_id)
+        return WorkspaceFilesListResponse(
+            files=[WorkspaceFileInfo(**item) for item in files]
+        )
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to list workspace files: {exc}")
+        raise HTTPException(status_code=500, detail="获取工作区文件失败") from exc
+
+
+@app.get("/api/session/{session_id}/workspace/files/{filename}", response_model=WorkspaceFileReadResponse)
+async def read_workspace_file(session_id: str, filename: str):
+    """Read a file from user_workspace."""
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    try:
+        content = orchestrator.storage.read_workspace_file(session_id, filename)
+        return WorkspaceFileReadResponse(
+            name=filename,
+            content=content,
+            size_bytes=len(content.encode("utf-8")),
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="文件不存在") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to read workspace file {filename}: {exc}")
+        raise HTTPException(status_code=500, detail="读取工作区文件失败") from exc
+
+
+@app.put("/api/session/{session_id}/workspace/files/{filename}", response_model=WorkspaceFileInfo)
+async def write_workspace_file(session_id: str, filename: str, request: WorkspaceFileWriteRequest):
+    """Write or overwrite a file in user_workspace."""
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    content_bytes = request.content.encode("utf-8")
+    if len(content_bytes) > MAX_WORKSPACE_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="文件内容超过 1MB 限制")
+
+    try:
+        metadata = orchestrator.storage.write_workspace_file(session_id, filename, request.content)
+        return WorkspaceFileInfo(**metadata)
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to write workspace file {filename}: {exc}")
+        raise HTTPException(status_code=500, detail="写入工作区文件失败") from exc
+
+
+@app.delete("/api/session/{session_id}/workspace/files/{filename}", status_code=204)
+async def delete_workspace_file(session_id: str, filename: str):
+    """Delete a file from user_workspace."""
+    orchestrator = _get_orchestrator(session_id)
+    if not orchestrator.storage.session_exists(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    try:
+        orchestrator.storage.delete_workspace_file(session_id, filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="文件不存在") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to delete workspace file {filename}: {exc}")
+        raise HTTPException(status_code=500, detail="删除工作区文件失败") from exc
+
+    return Response(status_code=204)
+
+
 @app.post("/api/session/{session_id}/code/run", response_model=RunCodeResponse)
 async def run_user_code(session_id: str, request: RunCodeRequest):
     """
@@ -1189,6 +1387,30 @@ async def get_sidecar_contract():
             path="/api/session/{session_id}/files/{filename}",
             stability="stable",
             source="demo_parity",
+        ),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/workspace/files",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/workspace/files/{filename}",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="PUT",
+            path="/api/session/{session_id}/workspace/files/{filename}",
+            stability="stable",
+            source="sidecar_extension",
+        ),
+        ContractRoute(
+            method="DELETE",
+            path="/api/session/{session_id}/workspace/files/{filename}",
+            stability="stable",
+            source="sidecar_extension",
         ),
         ContractRoute(method="GET", path="/api/courses", stability="stable", source="demo_parity"),
         ContractRoute(

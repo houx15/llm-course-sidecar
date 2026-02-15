@@ -22,6 +22,7 @@ async def process_turn_stream(
     templates: Dict[str, str],
     available_experts_info: str = "",
     uploaded_files_info_text: str = "",
+    recent_code_executions_text: str = "",
     consultation_guide_text: str = "",
     uploaded_files_info: Optional[Dict[str, Any]] = None,
     consultation_engine: Optional[Any] = None,
@@ -87,6 +88,7 @@ async def process_turn_stream(
             memory_recent_turns=memory_sections["recent_turns"],
             available_experts_info=available_experts_info,
             uploaded_files_info=uploaded_files_info_text,
+            recent_code_executions=recent_code_executions_text,
         )
 
         should_unlock, unlock_reason = _should_unlock_instruction(
@@ -257,6 +259,7 @@ async def process_turn_stream(
                 memory_recent_turns=memory_sections["recent_turns"],
                 available_experts_info=available_experts_info,
                 uploaded_files_info=uploaded_files_info_text,
+                recent_code_executions=recent_code_executions_text,
                 expert_output_summary=rma_guidance,
             )
 
