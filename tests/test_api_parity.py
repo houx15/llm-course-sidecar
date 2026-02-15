@@ -11,7 +11,7 @@ class FakeStorage:
     def __init__(self, exists=True):
         self.exists = exists
         self._turn_history = []
-        self._state = SimpleNamespace(turn_index=1)
+        self._state = SimpleNamespace(turn_index=1, chapter_id="course_1/ch_01")
         self._report = "dynamic report content"
 
     def session_exists(self, _session_id):
@@ -28,8 +28,9 @@ class FakeStorage:
 
 
 class FakeOrchestrator:
-    def __init__(self, storage=None):
+    def __init__(self, storage=None, curriculum_dir=Path("/tmp/curriculum")):
         self.storage = storage or FakeStorage()
+        self.curriculum_dir = curriculum_dir
 
     async def create_session(self, _chapter_id):
         return "sess-1"
@@ -176,6 +177,28 @@ def test_run_user_code_endpoint(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert response.json()["stdout"] == "ok"
+
+
+def test_get_session_workspace_endpoint(monkeypatch, tmp_path):
+    chapter_dir = tmp_path / "courses" / "course_1" / "chapters" / "ch_01"
+    (chapter_dir / "scripts").mkdir(parents=True, exist_ok=True)
+    (chapter_dir / "datasets").mkdir(parents=True, exist_ok=True)
+    (chapter_dir / "scripts" / "starter_code.py").write_text("print('ok')", encoding="utf-8")
+
+    fake_storage = FakeStorage(exists=True)
+    fake_storage._state = SimpleNamespace(turn_index=1, chapter_id="course_1/ch_01")
+    fake_orchestrator = FakeOrchestrator(storage=fake_storage, curriculum_dir=tmp_path)
+    monkeypatch.setattr(sidecar_main, "_get_orchestrator", lambda _sid: fake_orchestrator)
+
+    with TestClient(sidecar_main.app) as client:
+        response = client.get("/api/session/sess-1/workspace")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["chapter_id"] == "course_1/ch_01"
+    assert payload["scripts_dir"].endswith("/scripts")
+    assert payload["datasets_dir"].endswith("/datasets")
+    assert payload["starter_code"].endswith("/starter_code.py")
 
 
 def test_code_job_endpoints(monkeypatch):

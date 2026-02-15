@@ -24,6 +24,7 @@ Demo parity routes:
 - `GET /health`
 
 Sidecar extension routes:
+- `GET /api/session/{session_id}/workspace`
 - `POST /api/session/{session_id}/code/run`
 - `POST /api/session/{session_id}/code/jobs`
 - `GET /api/session/{session_id}/code/jobs/{job_id}`
@@ -48,3 +49,18 @@ Sidecar extension routes:
 Desktop-side normalization remains:
 - `complete -> done`
 - `consultation_* -> expert_consultation`
+
+## Chapter Bundle Structure
+
+Sidecar supports both chapter bundle layouts below:
+
+1. v1 flat prompts (legacy): chapter markdown files at chapter root.
+2. v2 structured prompts: markdown files under `prompts/` and optional `scripts/`, `datasets/`, `assets/`.
+
+During `create_session`, sidecar copies resolved chapter files into a session overlay path and preserves optional resource directories:
+- `scripts/`
+- `datasets/`
+- `assets/`
+
+Desktop can query resolved runtime paths via:
+- `GET /api/session/{session_id}/workspace`

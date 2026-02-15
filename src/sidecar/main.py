@@ -4,6 +4,8 @@ import logging
 import asyncio
 import os
 import shutil
+import hashlib
+from dataclasses import dataclass
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -53,6 +55,27 @@ default_main_agents_dir = Path(
 
 overlay_root = sessions_root / "_chapter_overlays"
 overlay_root.mkdir(parents=True, exist_ok=True)
+
+
+CHAPTER_PROMPT_FILES = (
+    "chapter_context.md",
+    "task_list.md",
+    "task_completion_principles.md",
+    "interaction_protocol.md",
+    "socratic_vs_direct.md",
+    "consultation_config.yaml",
+    "consultation_guide.md",
+    "consultation_guide.json",
+)
+
+
+@dataclass(frozen=True)
+class ChapterBundleLayout:
+    chapter_root: Path
+    prompts_dir: Path
+    scripts_dir: Optional[Path]
+    datasets_dir: Optional[Path]
+    assets_dir: Optional[Path]
 
 
 def _sanitize_segment(value: str) -> str:
@@ -113,7 +136,11 @@ def _resolve_experts_dir(desktop_context: Optional[Dict[str, Any]]) -> Path:
     return default_experts_dir
 
 
-def _find_chapter_dir_in_bundle(bundle_root: Path, course_id: str, chapter_name: str) -> Optional[Path]:
+def _resolve_chapter_bundle_layout(
+    bundle_root: Path,
+    course_id: str,
+    chapter_name: str,
+) -> Optional[ChapterBundleLayout]:
     candidates = []
     if course_id:
         candidates.extend(
@@ -135,9 +162,34 @@ def _find_chapter_dir_in_bundle(bundle_root: Path, course_id: str, chapter_name:
     for candidate in candidates:
         if not candidate.exists() or not candidate.is_dir():
             continue
+        prompts_dir = candidate / "prompts"
+        if prompts_dir.is_dir() and all((prompts_dir / name).exists() for name in required):
+            return ChapterBundleLayout(
+                chapter_root=candidate,
+                prompts_dir=prompts_dir,
+                scripts_dir=(candidate / "scripts") if (candidate / "scripts").is_dir() else None,
+                datasets_dir=(candidate / "datasets") if (candidate / "datasets").is_dir() else None,
+                assets_dir=(candidate / "assets") if (candidate / "assets").is_dir() else None,
+            )
         if all((candidate / name).exists() for name in required):
-            return candidate
+            return ChapterBundleLayout(
+                chapter_root=candidate,
+                prompts_dir=candidate,
+                scripts_dir=(candidate / "scripts") if (candidate / "scripts").is_dir() else None,
+                datasets_dir=(candidate / "datasets") if (candidate / "datasets").is_dir() else None,
+                assets_dir=(candidate / "assets") if (candidate / "assets").is_dir() else None,
+            )
     return None
+
+
+def _find_chapter_dir_in_bundle(bundle_root: Path, course_id: str, chapter_name: str) -> Optional[Path]:
+    """
+    Resolve prompt directory inside a chapter bundle.
+
+    This keeps backward-compatible behavior for callers expecting a prompt-file directory path.
+    """
+    layout = _resolve_chapter_bundle_layout(bundle_root, course_id, chapter_name)
+    return layout.prompts_dir if layout else None
 
 
 def _ensure_overlay_templates(curriculum_root: Path) -> None:
@@ -158,6 +210,49 @@ def _ensure_overlay_templates(curriculum_root: Path) -> None:
         return
 
 
+def _compute_overlay_fingerprint(bundle_root: Path, bundle_layout: ChapterBundleLayout) -> str:
+    """
+    Build a stable fingerprint for overlay isolation.
+
+    Uses file metadata (relative path + size + mtime_ns) for prompt/resource files so
+    overlay paths rotate when bundle content changes, without reading large file contents.
+    """
+    digest = hashlib.sha256()
+    digest.update(str(bundle_root.resolve()).encode("utf-8"))
+
+    manifest = bundle_root / "bundle.manifest.json"
+    if manifest.is_file():
+        stat = manifest.stat()
+        digest.update(b"manifest")
+        digest.update(str(stat.st_size).encode("utf-8"))
+        digest.update(str(stat.st_mtime_ns).encode("utf-8"))
+
+    for name in CHAPTER_PROMPT_FILES:
+        path = bundle_layout.prompts_dir / name
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        digest.update(f"prompt:{name}".encode("utf-8"))
+        digest.update(str(stat.st_size).encode("utf-8"))
+        digest.update(str(stat.st_mtime_ns).encode("utf-8"))
+
+    for subdir_name, source in (
+        ("scripts", bundle_layout.scripts_dir),
+        ("datasets", bundle_layout.datasets_dir),
+        ("assets", bundle_layout.assets_dir),
+    ):
+        if not source or not source.is_dir():
+            continue
+        for file_path in sorted(p for p in source.rglob("*") if p.is_file()):
+            rel = file_path.relative_to(source).as_posix()
+            stat = file_path.stat()
+            digest.update(f"{subdir_name}:{rel}".encode("utf-8"))
+            digest.update(str(stat.st_size).encode("utf-8"))
+            digest.update(str(stat.st_mtime_ns).encode("utf-8"))
+
+    return digest.hexdigest()[:12]
+
+
 def _resolve_curriculum_dir(chapter_id: str, desktop_context: Optional[Dict[str, Any]]) -> Path:
     bundle_paths = (desktop_context or {}).get("bundle_paths") or {}
     chapter_bundle_path = str(bundle_paths.get("chapter_bundle_path") or "").strip()
@@ -167,33 +262,57 @@ def _resolve_curriculum_dir(chapter_id: str, desktop_context: Optional[Dict[str,
 
     bundle_root = Path(chapter_bundle_path)
     course_id, chapter_name = _split_chapter_id(chapter_id)
-    chapter_dir = _find_chapter_dir_in_bundle(bundle_root, course_id, chapter_name)
-    if not chapter_dir:
+    bundle_layout = _resolve_chapter_bundle_layout(bundle_root, course_id, chapter_name)
+    if not bundle_layout:
         logger.warning(f"desktop_context chapter bundle path is set but no chapter files found: {chapter_bundle_path}")
         return default_curriculum_dir
 
-    overlay_id = "__".join(filter(None, [_sanitize_segment(course_id) or "legacy", _sanitize_segment(chapter_name)]))
+    fingerprint = _compute_overlay_fingerprint(bundle_root, bundle_layout)
+    overlay_id = "__".join(
+        filter(None, [_sanitize_segment(course_id) or "legacy", _sanitize_segment(chapter_name), fingerprint])
+    )
     chapter_target = overlay_root / overlay_id / "courses" / (course_id or "legacy_course") / "chapters" / chapter_name
+    if chapter_target.exists():
+        shutil.rmtree(chapter_target)
     chapter_target.mkdir(parents=True, exist_ok=True)
 
-    copy_names = [
-        "chapter_context.md",
-        "task_list.md",
-        "task_completion_principles.md",
-        "interaction_protocol.md",
-        "socratic_vs_direct.md",
-        "consultation_config.yaml",
-        "consultation_guide.md",
-        "consultation_guide.json",
-    ]
-    for name in copy_names:
-        src = chapter_dir / name
+    for name in CHAPTER_PROMPT_FILES:
+        src = bundle_layout.prompts_dir / name
         if src.exists():
             shutil.copy2(src, chapter_target / name)
+
+    for src_subdir, subdir_name in (
+        (bundle_layout.scripts_dir, "scripts"),
+        (bundle_layout.datasets_dir, "datasets"),
+        (bundle_layout.assets_dir, "assets"),
+    ):
+        if src_subdir and src_subdir.is_dir():
+            shutil.copytree(src_subdir, chapter_target / subdir_name)
 
     overlay_curriculum_root = (overlay_root / overlay_id).resolve()
     _ensure_overlay_templates(overlay_curriculum_root)
     return overlay_curriculum_root
+
+
+def _resolve_chapter_workspace(curriculum_dir: Path, chapter_id: str) -> Dict[str, Optional[str]]:
+    course_id, chapter_name = _split_chapter_id(chapter_id)
+    if course_id:
+        chapter_dir = curriculum_dir / "courses" / course_id / "chapters" / chapter_name
+    else:
+        chapter_dir = curriculum_dir / "chapters" / chapter_name
+
+    scripts_dir = chapter_dir / "scripts"
+    datasets_dir = chapter_dir / "datasets"
+    assets_dir = chapter_dir / "assets"
+    starter_code = scripts_dir / "starter_code.py"
+
+    return {
+        "chapter_dir": str(chapter_dir),
+        "scripts_dir": str(scripts_dir) if scripts_dir.is_dir() else None,
+        "datasets_dir": str(datasets_dir) if datasets_dir.is_dir() else None,
+        "assets_dir": str(assets_dir) if assets_dir.is_dir() else None,
+        "starter_code": str(starter_code) if starter_code.is_file() else None,
+    }
 
 
 def _resolve_runtime_paths(chapter_id: str, desktop_context: Optional[Dict[str, Any]]) -> tuple[Path, Path, Path]:
@@ -357,6 +476,16 @@ class DeleteFileResponse(BaseModel):
     """Response for file deletion."""
     success: bool
     message: str
+
+
+class SessionWorkspaceResponse(BaseModel):
+    """Resolved chapter workspace paths for a session."""
+    chapter_id: str
+    chapter_dir: str
+    scripts_dir: Optional[str] = None
+    datasets_dir: Optional[str] = None
+    assets_dir: Optional[str] = None
+    starter_code: Optional[str] = None
 
 
 class RunCodeRequest(BaseModel):
@@ -904,6 +1033,27 @@ async def get_session_history(session_id: str):
         raise HTTPException(status_code=500, detail="获取会话历史失败")
 
 
+@app.get("/api/session/{session_id}/workspace", response_model=SessionWorkspaceResponse)
+async def get_session_workspace(session_id: str):
+    """
+    Get resolved chapter workspace paths, including optional scripts/datasets/assets directories.
+    """
+    try:
+        orchestrator = _get_orchestrator(session_id)
+        if not orchestrator.storage.session_exists(session_id):
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        state = orchestrator.storage.load_state(session_id)
+        workspace = _resolve_chapter_workspace(orchestrator.curriculum_dir, state.chapter_id)
+        return SessionWorkspaceResponse(chapter_id=state.chapter_id, **workspace)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get session workspace: {e}")
+        raise HTTPException(status_code=500, detail="获取章节工作区失败")
+
+
 @app.post("/api/session/{session_id}/upload", response_model=UploadFilesResponse)
 async def upload_files(session_id: str, files: List[UploadFile] = File(...)):
     """
@@ -1176,6 +1326,12 @@ async def get_sidecar_contract():
             path="/api/session/{session_id}/history",
             stability="stable",
             source="demo_parity",
+        ),
+        ContractRoute(
+            method="GET",
+            path="/api/session/{session_id}/workspace",
+            stability="stable",
+            source="sidecar_extension",
         ),
         ContractRoute(
             method="POST",
