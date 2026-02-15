@@ -235,17 +235,12 @@ def _copy_chapter_bundle_assets(
 
     workspace_dir = storage.get_workspace_path(session_id)
     working_files_dir = storage.get_working_files_path(session_id)
-    allowed_workspace_extensions = set(
-        getattr(storage, "WORKSPACE_ALLOWED_EXTENSIONS", {".py", ".ipynb", ".txt", ".md"})
-    )
     files_added: set[str] = set()
 
     scripts_src = chapter_dir / "scripts"
     if scripts_src.is_dir():
         for item in sorted(scripts_src.iterdir()):
             if not item.is_file() or item.name == "solution.py":
-                continue
-            if item.suffix.lower() not in allowed_workspace_extensions:
                 continue
             target = workspace_dir / item.name
             shutil.copy2(item, target)

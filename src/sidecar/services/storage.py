@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -772,6 +773,8 @@ class Storage:
             try:
                 payload = self._read_json(history_file)
                 timestamp = float(payload.get("timestamp", history_file.stat().st_mtime))
+                if not math.isfinite(timestamp):
+                    raise ValueError("timestamp is not finite")
                 exit_code = int(payload.get("exit_code", payload.get("returncode", 0)))
             except Exception as exc:
                 logger.warning(f"Failed reading code history file {history_file}: {exc}")

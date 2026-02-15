@@ -118,6 +118,10 @@ def test_process_turn_skips_malformed_history_records(tmp_path):
         json.dumps({"timestamp": "bad", "exit_code": "oops", "code": "print('x')"}),
         encoding="utf-8",
     )
+    (history_dir / "run_2.json").write_text(
+        json.dumps({"timestamp": "inf", "exit_code": 0, "code": "print('y')"}),
+        encoding="utf-8",
+    )
 
     response = asyncio.run(orchestrator.process_turn("sess-1", "hello"))
     assert response == "ok"

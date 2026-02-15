@@ -115,7 +115,8 @@ class UserCodeRunner:
             process = subprocess.Popen(
                 [sys.executable, str(code_file)],
                 cwd=str(workspace),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 preexec_fn=self._build_preexec(memory_limit_mb),
             )

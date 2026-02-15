@@ -3,6 +3,7 @@
 import logging
 import uuid
 import asyncio
+import math
 import os
 import time
 from pathlib import Path
@@ -376,10 +377,16 @@ class Orchestrator:
         for idx, record in enumerate(executions, 1):
             try:
                 timestamp = float(record.get("timestamp", now))
+                if not math.isfinite(timestamp):
+                    raise ValueError("timestamp is not finite")
             except (TypeError, ValueError):
                 logger.warning("Skipping malformed code history record with invalid timestamp: %s", record)
                 continue
-            age_seconds = max(0, int(now - timestamp))
+            try:
+                age_seconds = max(0, int(now - timestamp))
+            except (TypeError, ValueError, OverflowError):
+                logger.warning("Skipping malformed code history record with unbounded age: %s", record)
+                continue
             if age_seconds < 60:
                 age_label = f"{age_seconds} 秒前"
             else:

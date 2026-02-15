@@ -51,6 +51,7 @@ def test_session_new_copies_bundle_scripts_and_datasets(monkeypatch, tmp_path: P
     scripts_dir = chapter_dir / "scripts"
     scripts_dir.mkdir()
     (scripts_dir / "starter.py").write_text("print('starter')\n", encoding="utf-8")
+    (scripts_dir / "config.json").write_text('{"mode": "demo"}\n', encoding="utf-8")
     (scripts_dir / "solution.py").write_text("print('answer')\n", encoding="utf-8")
 
     datasets_dir = chapter_dir / "datasets"
@@ -78,12 +79,14 @@ def test_session_new_copies_bundle_scripts_and_datasets(monkeypatch, tmp_path: P
     assert payload["workspace"]["has_starter_code"] is True
     assert payload["workspace"]["has_datasets"] is True
     assert {"name": "starter.py", "source": "bundle"} in payload["workspace"]["files"]
+    assert {"name": "config.json", "source": "bundle"} in payload["workspace"]["files"]
     assert {"name": "sample.csv", "source": "bundle"} in payload["workspace"]["files"]
     assert all(item["name"] != "solution.py" for item in payload["workspace"]["files"])
 
     workspace_path = storage.get_workspace_path("sess-bundle")
     working_files_path = storage.get_working_files_path("sess-bundle")
     assert (workspace_path / "starter.py").exists()
+    assert (workspace_path / "config.json").exists()
     assert not (workspace_path / "solution.py").exists()
     assert (working_files_path / "sample.csv").exists()
 
@@ -158,3 +161,24 @@ def test_code_history_saved_and_retrievable(tmp_path: Path):
     assert "print('hello')" in records[0]["code"]
     assert "hello" in records[0]["stdout"]
     assert records[0]["exit_code"] == 0
+
+
+def test_code_history_skips_nan_timestamp(tmp_path: Path):
+    sessions_root = tmp_path / "sessions"
+    storage = Storage(base_dir=str(sessions_root))
+    _create_session(storage, session_id="sess-history-bad")
+
+    history_dir = sessions_root / "sess-history-bad" / "code_history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    (history_dir / "run_1.json").write_text(
+        '{"timestamp": "nan", "exit_code": 0, "code": "print(1)", "stdout": "1", "stderr": ""}',
+        encoding="utf-8",
+    )
+    (history_dir / "run_2.json").write_text(
+        '{"timestamp": 1700000000.0, "exit_code": 0, "code": "print(2)", "stdout": "2", "stderr": ""}',
+        encoding="utf-8",
+    )
+
+    records = storage.get_recent_code_executions("sess-history-bad", limit=5)
+    assert len(records) == 1
+    assert "print(2)" in records[0]["code"]
