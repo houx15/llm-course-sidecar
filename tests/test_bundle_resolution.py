@@ -5,6 +5,8 @@ import tarfile
 import time
 from pathlib import Path
 
+import pytest
+
 import sidecar.main as sidecar_main
 
 
@@ -138,6 +140,62 @@ def test_resolve_curriculum_dir_isolates_overlay_per_bundle_version(tmp_path, mo
     assert not (chapter_v2 / "scripts" / "old_script.py").exists()
     assert not (chapter_v2 / "consultation_guide.md").exists()
     assert (chapter_v2 / "scripts" / "new_script.py").exists()
+
+
+def test_resolve_curriculum_dir_rejects_path_traversal_chapter_id(tmp_path, monkeypatch):
+    default_curriculum = tmp_path / "default_curriculum"
+    default_curriculum.mkdir(parents=True, exist_ok=True)
+
+    bundle_root = tmp_path / "bundle"
+    chapter_root = bundle_root / "courses" / "course_1" / "chapters" / "ch_01" / "prompts"
+    chapter_root.mkdir(parents=True, exist_ok=True)
+    for name, content in [
+        ("chapter_context.md", "# chapter"),
+        ("task_list.md", "- task"),
+        ("task_completion_principles.md", "- principle"),
+    ]:
+        (chapter_root / name).write_text(content, encoding="utf-8")
+
+    monkeypatch.setattr(sidecar_main, "default_curriculum_dir", default_curriculum)
+    monkeypatch.setattr(sidecar_main, "overlay_root", tmp_path / "sessions" / "_chapter_overlays")
+
+    with pytest.raises(ValueError):
+        sidecar_main._resolve_curriculum_dir(
+            "course_1/..",
+            {"bundle_paths": {"chapter_bundle_path": str(bundle_root)}},
+        )
+
+
+def test_resolve_curriculum_dir_legacy_id_writes_to_legacy_chapters_path(tmp_path, monkeypatch):
+    default_curriculum = tmp_path / "default_curriculum"
+    (default_curriculum / "_templates").mkdir(parents=True, exist_ok=True)
+    (default_curriculum / "_templates" / "dynamic_report_template.md").write_text("template", encoding="utf-8")
+
+    bundle_root = tmp_path / "bundle"
+    chapter_dir = bundle_root / "legacy_chapter_1"
+    chapter_dir.mkdir(parents=True, exist_ok=True)
+    for name, content in [
+        ("chapter_context.md", "# chapter"),
+        ("task_list.md", "- task"),
+        ("task_completion_principles.md", "- principle"),
+        ("interaction_protocol.md", "- protocol"),
+        ("socratic_vs_direct.md", "- mode"),
+    ]:
+        (chapter_dir / name).write_text(content, encoding="utf-8")
+
+    monkeypatch.setattr(sidecar_main, "default_curriculum_dir", default_curriculum)
+    monkeypatch.setattr(sidecar_main, "overlay_root", tmp_path / "sessions" / "_chapter_overlays")
+
+    resolved = sidecar_main._resolve_curriculum_dir(
+        "legacy_chapter_1",
+        {"bundle_paths": {"chapter_bundle_path": str(bundle_root)}},
+    )
+    legacy_target = resolved / "chapters" / "legacy_chapter_1"
+    wrong_target = resolved / "courses" / "legacy_course" / "chapters" / "legacy_chapter_1"
+
+    assert legacy_target.exists()
+    assert (legacy_target / "chapter_context.md").exists()
+    assert not wrong_target.exists()
 
 
 def test_build_chapter_bundle_script_generates_valid_tar_and_manifest(tmp_path):

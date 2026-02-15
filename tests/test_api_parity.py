@@ -80,6 +80,22 @@ def test_create_session_accepts_desktop_context(monkeypatch):
     assert "sess-1" in sidecar_main.session_orchestrators
 
 
+def test_create_session_rejects_invalid_chapter_id():
+    with TestClient(sidecar_main.app) as client:
+        response = client.post(
+            "/api/session/new",
+            json={
+                "chapter_id": "course_1/..",
+                "desktop_context": {
+                    "bundle_paths": {"chapter_bundle_path": "/tmp/chapter_bundle"},
+                },
+            },
+        )
+
+    assert response.status_code == 400
+    assert "invalid chapter_id" in response.json()["detail"]
+
+
 def test_stream_nonexistent_session_emits_structured_error(monkeypatch):
     fake_orchestrator = FakeOrchestrator(storage=FakeStorage(exists=False))
     monkeypatch.setattr(sidecar_main, "_get_orchestrator", lambda _sid: fake_orchestrator)

@@ -82,11 +82,28 @@ def _sanitize_segment(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in str(value or ""))
 
 
+def _validate_chapter_segment(segment: str, field_name: str) -> str:
+    value = str(segment or "").strip()
+    if not value:
+        raise ValueError(f"invalid chapter_id: {field_name} is empty")
+    if value in {".", ".."}:
+        raise ValueError(f"invalid chapter_id: {field_name} cannot be '.' or '..'")
+    if "/" in value or "\\" in value:
+        raise ValueError(f"invalid chapter_id: {field_name} cannot contain path separators")
+    if _sanitize_segment(value) != value:
+        raise ValueError(f"invalid chapter_id: {field_name} contains unsupported characters")
+    return value
+
+
 def _split_chapter_id(chapter_id: str) -> tuple[str, str]:
     chapter = str(chapter_id or "").strip()
     if "/" in chapter:
-        return chapter.split("/", 1)[0], chapter.split("/", 1)[1]
-    return "", chapter
+        raw_course_id, raw_chapter_name = chapter.split("/", 1)
+        course_id = _validate_chapter_segment(raw_course_id, "course_id")
+        chapter_name = _validate_chapter_segment(raw_chapter_name, "chapter_name")
+        return course_id, chapter_name
+    chapter_name = _validate_chapter_segment(chapter, "chapter_name")
+    return "", chapter_name
 
 
 def _exists(path: Optional[Path]) -> bool:
@@ -271,7 +288,13 @@ def _resolve_curriculum_dir(chapter_id: str, desktop_context: Optional[Dict[str,
     overlay_id = "__".join(
         filter(None, [_sanitize_segment(course_id) or "legacy", _sanitize_segment(chapter_name), fingerprint])
     )
-    chapter_target = overlay_root / overlay_id / "courses" / (course_id or "legacy_course") / "chapters" / chapter_name
+    overlay_curriculum_root = (overlay_root / overlay_id).resolve()
+    if course_id:
+        chapter_target = (overlay_curriculum_root / "courses" / course_id / "chapters" / chapter_name).resolve()
+    else:
+        chapter_target = (overlay_curriculum_root / "chapters" / chapter_name).resolve()
+    if not chapter_target.is_relative_to(overlay_curriculum_root):
+        raise ValueError("invalid chapter_id: resolved chapter path escapes overlay root")
     if chapter_target.exists():
         shutil.rmtree(chapter_target)
     chapter_target.mkdir(parents=True, exist_ok=True)
@@ -289,7 +312,6 @@ def _resolve_curriculum_dir(chapter_id: str, desktop_context: Optional[Dict[str,
         if src_subdir and src_subdir.is_dir():
             shutil.copytree(src_subdir, chapter_target / subdir_name)
 
-    overlay_curriculum_root = (overlay_root / overlay_id).resolve()
     _ensure_overlay_templates(overlay_curriculum_root)
     return overlay_curriculum_root
 
@@ -582,6 +604,7 @@ async def create_session(request: CreateSessionRequest):
     """
     try:
         logger.info(f"Creating new session for chapter: {request.chapter_id}")
+        _split_chapter_id(request.chapter_id)  # Validate chapter_id format early.
         desktop_context = request.desktop_context.model_dump() if request.desktop_context else None
         curriculum_dir, experts_dir, main_agents_dir = _resolve_runtime_paths(request.chapter_id, desktop_context)
         logger.info(
@@ -615,6 +638,8 @@ async def create_session(request: CreateSessionRequest):
     except OrchestratorError as e:
         logger.error(f"Failed to create session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="创建会话失败")
