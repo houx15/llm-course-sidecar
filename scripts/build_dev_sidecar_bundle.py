@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import io
 import json
+import shlex
 import sys
 import tarfile
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ def _sha256_bytes(data: bytes) -> str:
 
 
 def main() -> int:
+    # NOTE: This bundle embeds absolute paths from the build machine (Python executable
+    # and sidecar source directory). It is intentionally machine-specific (scope_id="dev-local").
     parser = argparse.ArgumentParser(description="Build a dev-mode python_runtime bundle")
     parser.add_argument("--sidecar-src", required=True, help="Path to llm-course-sidecar/ directory")
     parser.add_argument("--python-path", default=sys.executable, help="Path to Python executable")
@@ -65,7 +68,7 @@ def main() -> int:
         _add("runtime.manifest.json", json.dumps(manifest, indent=2).encode())
 
         # start.sh — thin wrapper that calls the real Python
-        start_sh = f"#!/bin/sh\nexec '{python_path}' \"$@\"\n".encode()
+        start_sh = f"#!/bin/sh\nexec {shlex.quote(str(python_path))} \"$@\"\n".encode()
         _add("start.sh", start_sh, mode=0o755)
 
         # sidecar_root/app/server/main.py — entry point the desktop looks for
