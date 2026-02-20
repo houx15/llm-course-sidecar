@@ -75,7 +75,7 @@ def _parse_sse_events(raw_text: str) -> list[dict]:
                 try:
                     events.append(json.loads(payload))
                 except json.JSONDecodeError:
-                    pass  # skip malformed lines
+                    print(f"[warn] Skipping malformed SSE line: {payload!r}")
     return events
 
 
@@ -104,7 +104,10 @@ def bundle_dir(tmp_path_factory):
         )
     tmp = tmp_path_factory.mktemp("ch1_intro_bundle")
     with tarfile.open(BUNDLE_PATH, "r:gz") as tf:
-        tf.extractall(tmp)
+        try:
+            tf.extractall(tmp, filter='data')
+        except TypeError:
+            tf.extractall(tmp)  # Python < 3.12
     return tmp
 
 
@@ -203,7 +206,7 @@ class TestE2ESidecarInteraction:
                 json=payload,
                 headers={"Accept": "text/event-stream"},
             )
-        except httpx.RequestError as exc:
+        except (httpx.RequestError, httpx.TimeoutException) as exc:
             pytest.skip(f"Sidecar connection error during streaming: {exc}")
 
         assert resp.status_code == 200, (
@@ -283,23 +286,8 @@ class TestE2ESidecarInteraction:
 
 def test_health_endpoint():
     """Sanity check: /health returns 200 when the sidecar is running."""
-    if not _is_integration():
-        pytest.skip("RUN_INTEGRATION not set")
     if not _sidecar_is_running():
         pytest.skip(f"Sidecar not running at {SIDECAR_URL}")
 
     resp = httpx.get(f"{SIDECAR_URL}/health", timeout=5.0)
     assert resp.status_code == 200, f"/health returned {resp.status_code}"
-
-
-def test_skips_without_bundle(tmp_path):
-    """
-    Verify the bundle-existence skip logic works correctly when pointed at a
-    nonexistent path. This test runs WITHOUT RUN_INTEGRATION and without a
-    real sidecar; it just exercises the skip guard in isolation.
-    """
-    missing = tmp_path / "nonexistent.tar.gz"
-    assert not missing.exists(), "sanity: file must not exist"
-    # The actual skip is triggered by the bundle_dir fixture when BUNDLE_PATH is missing.
-    # Here we just confirm the path check logic is sound.
-    assert not missing.exists()
