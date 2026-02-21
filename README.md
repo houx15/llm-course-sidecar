@@ -10,7 +10,7 @@ This repo owns the production sidecar runtime extracted from `demo/`:
 - Expert code execution runtime
 - User code / notebook execution runtime
 - Sidecar API + streaming contract
-- Platform-specific `python_runtime` bundle build and release
+- Platform-agnostic `python_runtime` bundle build and release (Python runtime provided by Miniconda on the desktop side)
 
 ## Non-Goals
 
@@ -63,12 +63,25 @@ Optional runtime path env vars:
 - `EXPERT_YELLOW_PAGE_PATH`
 - `SIDECAR_SERVICES_DIR`
 
+## Bundle Build
+
+To build a platform-agnostic sidecar code bundle (for uploading to the backend):
+
+```bash
+python scripts/build_sidecar_code_bundle.py --version 0.2.0 --output /tmp/
+```
+
+This produces `/tmp/sidecar_code_<version>.tar.gz` containing the full sidecar source + `requirements.txt`. Upload to the backend as `bundle_type=python_runtime, scope_id=core`.
+
 ## Tests
 
 1. Install dev dependencies:
    - `pip install -e .[dev]`
-2. Run API parity tests:
-   - `pytest -q tests/test_api_parity.py`
+2. Run unit tests:
+   - `pytest -q tests/`
+3. Run E2E sidecar interaction test (requires a running sidecar + LLM key):
+   - `RUN_INTEGRATION=1 pytest tests/test_e2e_sidecar_interaction.py -v -s`
+   - Requires `/tmp/ch1_intro_bundle.tar.gz` (chapter bundle) and sidecar running at `http://127.0.0.1:8000`
 
 ## Relationship to Other Repos
 
