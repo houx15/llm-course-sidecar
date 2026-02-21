@@ -22,9 +22,21 @@ from .services.notebook_manager import NotebookManager
 from .config import settings
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+_log_fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+logging.basicConfig(level=logging.INFO, format=_log_fmt)
+
+# Optionally mirror all logs to a file (set LOG_FILE env var from the desktop).
+_log_file = os.getenv("LOG_FILE", "").strip()
+if _log_file:
+    try:
+        Path(_log_file).parent.mkdir(parents=True, exist_ok=True)
+        _fh = logging.FileHandler(_log_file, encoding="utf-8")
+        _fh.setFormatter(logging.Formatter(_log_fmt))
+        _fh.setLevel(logging.DEBUG)
+        logging.getLogger().addHandler(_fh)
+    except Exception as _log_err:
+        print(f"[sidecar] WARNING: could not open log file {_log_file!r}: {_log_err}", flush=True)
+
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app
