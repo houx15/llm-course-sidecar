@@ -39,10 +39,14 @@ class MemoryManager:
         memory_state = self.storage.load_memory_state(session_id)
 
         total_budget = self._calculate_memory_budget(user_message_length)
-        long_term_budget, short_term_budget, mid_term_budget = self._allocate_budgets(total_budget)
+        long_term_budget, short_term_budget, mid_term_budget = self._allocate_budgets(
+            total_budget
+        )
 
         long_term = self._truncate(memory_state.long_term_summary, long_term_budget)
-        mid_term = self._format_mid_term(memory_state.mid_term_summaries, mid_term_budget)
+        mid_term = self._format_mid_term(
+            memory_state.mid_term_summaries, mid_term_budget
+        )
 
         recent_turns = self.storage.load_recent_turns(
             session_id,
@@ -101,7 +105,11 @@ class MemoryManager:
             logger.warning(f"Failed to save memory state: {e}")
 
     def _calculate_memory_budget(self, user_message_length: int) -> int:
-        remaining = settings.max_context_chars - settings.memory_reserved_chars - user_message_length
+        remaining = (
+            settings.max_context_chars
+            - settings.memory_reserved_chars
+            - user_message_length
+        )
         remaining = max(0, remaining)
         return min(settings.memory_total_budget_chars, remaining)
 
@@ -140,7 +148,9 @@ class MemoryManager:
         parts: List[str] = []
         for turn in turns:
             user_text = self._truncate(turn.get("user_message", ""), per_turn_chars)
-            assistant_text = self._truncate(turn.get("companion_response", ""), per_turn_chars)
+            assistant_text = self._truncate(
+                turn.get("companion_response", ""), per_turn_chars
+            )
             parts.append(
                 f"[Turn {turn.get('turn_index')}]\n"
                 f"User: {user_text}\n"
@@ -188,7 +198,7 @@ class MemoryManager:
         try:
             response = await self.llm_client.generate(
                 prompt,
-                temperature=0.2,
+                # temperature=0.2,
                 max_tokens=512,
             )
         except LLMError as e:
@@ -241,7 +251,9 @@ class MemoryManager:
         memory_state.last_mid_term_turn = end_turn
 
         if len(memory_state.mid_term_summaries) > settings.memory_mid_term_max_chunks:
-            memory_state.mid_term_summaries = memory_state.mid_term_summaries[-settings.memory_mid_term_max_chunks :]
+            memory_state.mid_term_summaries = memory_state.mid_term_summaries[
+                -settings.memory_mid_term_max_chunks :
+            ]
 
     async def _summarize_turn_chunk(self, turns: List[Dict]) -> Optional[str]:
         turns_text = self._format_recent_turns(
@@ -266,7 +278,7 @@ class MemoryManager:
         try:
             response = await self.llm_client.generate(
                 prompt,
-                temperature=0.2,
+                # temperature=0.2,
                 max_tokens=512,
             )
         except LLMError as e:

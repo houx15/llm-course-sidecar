@@ -8,6 +8,7 @@ from ..config import settings
 
 class LLMError(Exception):
     """Custom exception for LLM errors."""
+
     pass
 
 
@@ -19,7 +20,7 @@ class LLMClient(ABC):
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
+        # temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
         """
@@ -28,7 +29,7 @@ class LLMClient(ABC):
         Args:
             prompt: User prompt
             system_prompt: Optional system prompt
-            temperature: Sampling temperature
+            # temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
 
         Returns:
@@ -40,7 +41,9 @@ class LLMClient(ABC):
 class AnthropicClient(LLMClient):
     """Anthropic Claude API client."""
 
-    def __init__(self, api_key: str, model: str, base_url: str = "https://api.anthropic.com"):
+    def __init__(
+        self, api_key: str, model: str, base_url: str = "https://api.anthropic.com"
+    ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -49,7 +52,7 @@ class AnthropicClient(LLMClient):
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
+        # temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
         """Generate text using Anthropic API."""
@@ -65,7 +68,7 @@ class AnthropicClient(LLMClient):
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
-            "temperature": temperature,
+            # "temperature": temperature,
         }
 
         if system_prompt:
@@ -98,7 +101,9 @@ class AnthropicClient(LLMClient):
 class OpenAIClient(LLMClient):
     """OpenAI API client."""
 
-    def __init__(self, api_key: str, model: str, base_url: str = "https://api.openai.com"):
+    def __init__(
+        self, api_key: str, model: str, base_url: str = "https://api.openai.com"
+    ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -107,7 +112,7 @@ class OpenAIClient(LLMClient):
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
+        # temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
         """Generate text using OpenAI API."""
@@ -124,7 +129,7 @@ class OpenAIClient(LLMClient):
         payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
+            # "temperature": temperature,
             "max_tokens": max_tokens,
         }
 
@@ -164,7 +169,7 @@ class CustomClient(LLMClient):
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
+        # temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
         """Generate text using custom API (OpenAI-compatible format)."""
@@ -181,7 +186,7 @@ class CustomClient(LLMClient):
         payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
+            # "temperature": temperature,
             "max_tokens": max_tokens,
         }
 
@@ -197,12 +202,16 @@ class CustomClient(LLMClient):
                 # Debug: Check response content
                 response_text = response.text
                 if not response_text:
-                    raise LLMError(f"Empty response from API. Status: {response.status_code}")
+                    raise LLMError(
+                        f"Empty response from API. Status: {response.status_code}"
+                    )
 
                 try:
                     data = response.json()
                 except Exception as json_error:
-                    raise LLMError(f"Invalid JSON response. Content: {response_text[:500]}")
+                    raise LLMError(
+                        f"Invalid JSON response. Content: {response_text[:500]}"
+                    )
 
                 # Extract text from response (OpenAI format)
                 if "choices" in data and len(data["choices"]) > 0:
