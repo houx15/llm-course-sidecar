@@ -1,0 +1,81 @@
+name: Build & Upload Sidecar Bundle
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'pyproject.toml'
+      - 'scripts/build_sidecar_code_bundle.py'
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed to count total commits for version suffix
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Compute version
+        id: version
+        run: |
+          # Read base version from pyproject.toml (Python 3.11 tomllib, stdlib)
+          BASE_VERSION=$(python3 -c "
+          import tomllib
+          with open('pyproject.toml', 'rb') as f:
+              data = tomllib.load(f)
+          print(data['project']['version'])
+          ")
+
+          # Use total commit count as a monotonically increasing build number
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+
+          # Final version: e.g. 0.1.0-build.42
+          VERSION="${BASE_VERSION}-build.${COMMIT_COUNT}"
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION}"
+
+      - name: Build bundle
+        run: |
+          python scripts/build_sidecar_code_bundle.py \
+            --version "${{ steps.version.outputs.version }}" \
+            --scope-id core \
+            --output /tmp/
+
+      - name: Upload bundle to backend
+        env:
+          ADMIN_KEY: ${{ secrets.SIDECAR_ADMIN_KEY }}
+          BACKEND_URL: ${{ secrets.SIDECAR_BACKEND_URL }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BUNDLE_FILE="/tmp/sidecar_code_${VERSION}.tar.gz"
+
+          echo "Uploading ${BUNDLE_FILE} to ${BACKEND_URL} ..."
+
+          HTTP_STATUS=$(curl -s -o /tmp/upload_response.json -w "%{http_code}" \
+            -X POST "${BACKEND_URL}/v1/admin/bundles/upload" \
+            -H "X-Admin-Key: ${ADMIN_KEY}" \
+            -F "file=@${BUNDLE_FILE};type=application/gzip" \
+            -F "bundle_type=python_runtime" \
+            -F "scope_id=core" \
+            -F "version=${VERSION}" \
+            -F "is_mandatory=true" \
+            -F 'manifest_json={}')
+
+          echo "HTTP status: ${HTTP_STATUS}"
+          cat /tmp/upload_response.json
+
+          if [ "${HTTP_STATUS}" != "201" ]; then
+            echo "Upload failed with HTTP ${HTTP_STATUS}" >&2
+            exit 1
+          fi
+
+          echo "Upload successful!"
