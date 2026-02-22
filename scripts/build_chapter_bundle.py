@@ -27,6 +27,7 @@ OPTIONAL_PROMPTS = (
     "consultation_config.yaml",
     "consultation_guide.md",
     "consultation_guide.json",
+    "chapter.json",
 )
 
 
@@ -111,6 +112,20 @@ def _infer_ids(chapter_dir: Path) -> tuple[str, str]:
     return course_id, chapter_code
 
 
+def _load_chapter_json(chapter_dir: Path) -> Dict[str, Any]:
+    """Load chapter.json metadata if present; returns empty dict if missing."""
+    path = chapter_dir / "chapter.json"
+    if not path.is_file():
+        # Also check inside a prompts/ subdirectory
+        path = chapter_dir / "prompts" / "chapter.json"
+    if path.is_file():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
 def _extract_title(prompt_source: Path, chapter_code: str) -> str:
     chapter_context = prompt_source / "chapter_context.md"
     if not chapter_context.is_file():
@@ -166,9 +181,13 @@ def _build_manifest(
     required_experts: Optional[List[str]],
 ) -> Dict[str, Any]:
     inferred_course_id, inferred_chapter_code = _infer_ids(chapter_dir)
-    final_course_id = course_id or inferred_course_id
-    final_chapter_code = chapter_code or inferred_chapter_code
-    final_title = title or _extract_title(prompt_source, final_chapter_code)
+
+    # Load chapter.json metadata (highest priority for title, sort_order, etc.)
+    chapter_meta = _load_chapter_json(chapter_dir)
+
+    final_course_id = course_id or chapter_meta.get("course_id") or inferred_course_id
+    final_chapter_code = chapter_code or chapter_meta.get("chapter_code") or inferred_chapter_code
+    final_title = title or chapter_meta.get("title") or _extract_title(prompt_source, final_chapter_code)
     final_scope_id = scope_id or f"{final_course_id}/{final_chapter_code}".strip("/")
 
     scripts_dir = stage_root / "scripts"
@@ -176,7 +195,7 @@ def _build_manifest(
     final_required_experts = (
         required_experts
         if required_experts is not None
-        else _infer_required_experts(prompt_source)
+        else chapter_meta.get("available_experts") or _infer_required_experts(prompt_source)
     )
 
     return {
@@ -189,6 +208,9 @@ def _build_manifest(
             "course_id": final_course_id,
             "chapter_code": final_chapter_code,
             "title": final_title,
+            "sort_order": chapter_meta.get("sort_order"),
+            "intro_text": chapter_meta.get("intro_text", ""),
+            "colab_link": chapter_meta.get("colab_link", ""),
             "has_scripts": scripts_dir.is_dir(),
             "has_datasets": datasets_dir.is_dir(),
             "required_experts": final_required_experts or [],
