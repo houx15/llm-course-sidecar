@@ -913,6 +913,52 @@ async def create_session(request: CreateSessionRequest):
         raise HTTPException(status_code=500, detail="创建会话失败")
 
 
+class ReattachSessionRequest(BaseModel):
+    desktop_context: Optional[DesktopContext] = None
+
+
+@app.post("/api/session/{session_id}/reattach")
+async def reattach_session(session_id: str, request: ReattachSessionRequest):
+    """
+    Re-register an existing session's orchestrator in memory after a sidecar restart.
+
+    The session files must already exist on disk. This endpoint resolves the
+    correct curriculum/experts paths from desktop_context (if provided) and
+    rebuilds the in-memory orchestrator so subsequent message streams work.
+    """
+    try:
+        if not default_orchestrator.storage.session_exists(session_id):
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        if session_id in session_orchestrators:
+            return {"status": "already_attached"}
+
+        desktop_context = (
+            request.desktop_context.model_dump() if request.desktop_context else None
+        )
+        state = default_orchestrator.storage.load_state(session_id)
+        chapter_id = state.chapter_id
+
+        curriculum_dir, experts_dir, main_agents_dir = _resolve_runtime_paths(
+            chapter_id, desktop_context
+        )
+        orchestrator = _build_orchestrator(
+            curriculum_dir=curriculum_dir,
+            experts_dir=experts_dir,
+            main_agents_dir=main_agents_dir,
+        )
+        session_orchestrators[session_id] = orchestrator
+        _save_session_paths(session_id, curriculum_dir, experts_dir, main_agents_dir)
+        logger.info(f"Session {session_id} reattached with curriculum={curriculum_dir}")
+        return {"status": "reattached"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to reattach session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail="重连会话失败")
+
+
 @app.post("/api/session/{session_id}/message/stream")
 async def send_message_stream(session_id: str, request: SendMessageRequest):
     """
