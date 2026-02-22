@@ -495,6 +495,8 @@ default_orchestrator = _build_orchestrator(
     main_agents_dir=default_main_agents_dir,
 )
 session_orchestrators: dict[str, Orchestrator] = {}
+# Maps session_id → sync config passed at create time
+session_sync_config: Dict[str, Dict[str, str]] = {}
 user_code_runner = UserCodeRunner(sessions_root=sessions_root)
 code_execution_manager = CodeExecutionManager(runner=user_code_runner)
 notebook_manager = NotebookManager()
@@ -580,6 +582,18 @@ class CreateSessionRequest(BaseModel):
     desktop_context: Optional[DesktopContext] = Field(
         default=None,
         description="Desktop-provided bundle and prompt resolution context",
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Backend-registered session ID; if provided, sidecar uses this as the session identifier",
+    )
+    backend_url: Optional[str] = Field(
+        default=None,
+        description="Backend base URL for post-turn sync",
+    )
+    auth_token: Optional[str] = Field(
+        default=None,
+        description="JWT forwarded from desktop for authenticating backend sync calls",
     )
 
 
@@ -847,6 +861,50 @@ class ResetNotebookResponse(BaseModel):
     success: bool
 
 
+async def _sync_turn_to_backend(
+    session_id: str,
+    chapter_id: str,
+    turn_index: int,
+    user_message: str,
+    companion_response: str,
+    turn_outcome: dict,
+    memo_json: dict,
+    report_md: str,
+) -> None:
+    """Best-effort post-turn sync to backend. Failures are logged but never raised."""
+    cfg = session_sync_config.get(session_id)
+    if not cfg:
+        return
+    base = cfg["backend_url"]
+    headers = {"Authorization": f"Bearer {cfg['auth_token']}"}
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{base}/v1/sessions/{session_id}/turns",
+                json={
+                    "chapter_id": chapter_id,
+                    "turn_index": turn_index,
+                    "user_message": user_message,
+                    "companion_response": companion_response,
+                    "turn_outcome": turn_outcome,
+                },
+                headers=headers,
+            )
+            await client.put(
+                f"{base}/v1/sessions/{session_id}/memory",
+                json={"chapter_id": chapter_id, "memory_json": memo_json},
+                headers=headers,
+            )
+            await client.put(
+                f"{base}/v1/sessions/{session_id}/report",
+                json={"chapter_id": chapter_id, "report_md": report_md},
+                headers=headers,
+            )
+    except Exception as exc:
+        logger.warning("Backend sync failed for session %s turn %d: %s", session_id, turn_index, exc)
+
+
 # API Endpoints
 
 
@@ -879,9 +937,21 @@ async def create_session(request: CreateSessionRequest):
             experts_dir=experts_dir,
             main_agents_dir=main_agents_dir,
         )
-        session_id = await orchestrator.create_session(request.chapter_id)
+        auto_session_id = await orchestrator.create_session(request.chapter_id)
+        session_id = auto_session_id
+        if request.session_id and request.session_id != auto_session_id:
+            # Rename session directory to match backend-registered ID
+            src_dir = sessions_root / auto_session_id
+            dst_dir = sessions_root / request.session_id
+            shutil.move(str(src_dir), str(dst_dir))
+            session_id = request.session_id
         session_orchestrators[session_id] = orchestrator
         _save_session_paths(session_id, curriculum_dir, experts_dir, main_agents_dir)
+        if request.backend_url and request.auth_token:
+            session_sync_config[session_id] = {
+                "backend_url": request.backend_url.rstrip("/"),
+                "auth_token": request.auth_token,
+            }
         workspace_info = _copy_chapter_bundle_assets(
             session_id=session_id,
             chapter_id=request.chapter_id,
@@ -1000,6 +1070,36 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.01)  # Small delay for smooth streaming
 
+            # Post-turn sync — best-effort fire-and-forget
+            try:
+                _state = orchestrator.storage.load_state(session_id)
+                _history = orchestrator.storage.load_turn_history(session_id)
+                _latest = _history[-1] if _history else {}
+                _memo = {}
+                try:
+                    _memo_digest = orchestrator.storage.load_memo_digest(session_id)
+                    if _memo_digest is not None:
+                        _memo = _memo_digest.model_dump()
+                except Exception:
+                    pass
+                _report_md = ""
+                try:
+                    _report_md = orchestrator.storage.load_dynamic_report(session_id)
+                except Exception:
+                    pass
+                asyncio.create_task(_sync_turn_to_backend(
+                    session_id=session_id,
+                    chapter_id=_state.chapter_id,
+                    turn_index=_state.turn_index,
+                    user_message=_latest.get("user_message", ""),
+                    companion_response=_latest.get("companion_response", ""),
+                    turn_outcome=_latest.get("turn_outcome", {}),
+                    memo_json=_memo if isinstance(_memo, dict) else {},
+                    report_md=_report_md,
+                ))
+            except Exception as _exc:
+                logger.warning("Failed to schedule backend sync: %s", _exc)
+
             # Send complete event
             state = orchestrator.storage.load_state(session_id)
             import json
@@ -1086,6 +1186,7 @@ async def end_session(session_id: str):
 
         final_report = await orchestrator.end_session(session_id)
         session_orchestrators.pop(session_id, None)
+        session_sync_config.pop(session_id, None)
 
         logger.info("Session ended successfully")
         return EndSessionResponse(final_report=final_report)
