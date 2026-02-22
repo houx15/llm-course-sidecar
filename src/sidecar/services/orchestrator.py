@@ -703,7 +703,7 @@ class Orchestrator:
                 user_message_length=len(initial_user_message),
             )
 
-            ca_response, turn_outcome = await self.agent_runner.run_companion(
+            ca_response, turn_outcome, _ = await self.agent_runner.run_companion(
                 user_message=initial_user_message,
                 instruction_packet=rma_result.instruction_packet,
                 dynamic_report="",
@@ -729,7 +729,7 @@ class Orchestrator:
 
             # Step 5: Call MA to initialize reports
             logger.info("Calling MA to initialize reports")
-            memo_result = await self.agent_runner.run_memo(
+            memo_result, _ = await self.agent_runner.run_memo(
                 user_message=initial_user_message,
                 companion_response=ca_response,
                 turn_outcome=turn_outcome,
@@ -842,7 +842,7 @@ class Orchestrator:
             perf_tracker.start_operation("run_companion", {"phase": "initial"})
 
             try:
-                ca_response, turn_outcome = await self.agent_runner.run_companion(
+                ca_response, turn_outcome, _ = await self.agent_runner.run_companion(
                     user_message=user_message,
                     instruction_packet=instruction_packet,
                     dynamic_report=dynamic_report,
@@ -1025,7 +1025,7 @@ class Orchestrator:
                     logger.info("Re-running Companion Agent after RMA update")
                     perf_tracker.start_operation("run_companion", {"phase": "after_rma"})
                     try:
-                        final_response, final_turn_outcome = await self.agent_runner.run_companion(
+                        final_response, final_turn_outcome, _ = await self.agent_runner.run_companion(
                             user_message=user_message,
                             instruction_packet=final_instruction,
                             dynamic_report=dynamic_report,
@@ -1075,7 +1075,7 @@ class Orchestrator:
             logger.info("Calling Memo Agent")
             perf_tracker.start_operation("run_memo")
             try:
-                memo_result = await self.agent_runner.run_memo(
+                memo_result, _ = await self.agent_runner.run_memo(
                     user_message=user_message,
                     companion_response=final_response,
                     turn_outcome=turn_outcome,
