@@ -501,8 +501,41 @@ notebook_manager = NotebookManager()
 MAX_WORKSPACE_FILE_SIZE_BYTES = 1 * 1024 * 1024
 
 
+def _save_session_paths(session_id: str, curriculum_dir: Path, experts_dir: Path, main_agents_dir: Path) -> None:
+    """Persist resolved runtime paths so the orchestrator can be rebuilt after restart."""
+    import json
+    session_dir = sessions_root / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "curriculum_dir": str(curriculum_dir),
+        "experts_dir": str(experts_dir),
+        "main_agents_dir": str(main_agents_dir),
+    }
+    (session_dir / "session_paths.json").write_text(json.dumps(paths), encoding="utf-8")
+
+
 def _get_orchestrator(session_id: str) -> Orchestrator:
-    return session_orchestrators.get(session_id, default_orchestrator)
+    if session_id in session_orchestrators:
+        return session_orchestrators[session_id]
+
+    # Try to rebuild from persisted paths after a sidecar restart
+    import json
+    paths_file = sessions_root / session_id / "session_paths.json"
+    if paths_file.exists():
+        try:
+            paths = json.loads(paths_file.read_text(encoding="utf-8"))
+            orchestrator = _build_orchestrator(
+                curriculum_dir=Path(paths["curriculum_dir"]),
+                experts_dir=Path(paths["experts_dir"]),
+                main_agents_dir=Path(paths["main_agents_dir"]),
+            )
+            session_orchestrators[session_id] = orchestrator
+            logger.info(f"Rebuilt orchestrator for session {session_id} from persisted paths")
+            return orchestrator
+        except Exception as e:
+            logger.warning(f"Failed to rebuild orchestrator for {session_id}: {e}")
+
+    return default_orchestrator
 
 
 def _build_code_job_summary(job: Any) -> "CodeJobSummary":
@@ -848,6 +881,7 @@ async def create_session(request: CreateSessionRequest):
         )
         session_id = await orchestrator.create_session(request.chapter_id)
         session_orchestrators[session_id] = orchestrator
+        _save_session_paths(session_id, curriculum_dir, experts_dir, main_agents_dir)
         workspace_info = _copy_chapter_bundle_assets(
             session_id=session_id,
             chapter_id=request.chapter_id,
