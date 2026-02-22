@@ -196,7 +196,7 @@ class MemoryManager:
         )
 
         try:
-            response = await self.llm_client.generate(
+            response, _ = await self.llm_client.generate(
                 prompt,
                 # temperature=0.2,
                 max_tokens=512,
@@ -276,7 +276,7 @@ class MemoryManager:
         )
 
         try:
-            response = await self.llm_client.generate(
+            response, _ = await self.llm_client.generate(
                 prompt,
                 # temperature=0.2,
                 max_tokens=512,
