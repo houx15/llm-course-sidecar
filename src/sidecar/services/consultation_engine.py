@@ -340,7 +340,7 @@ class ConsultationEngine:
             raise ConsultationEngineError(f"Expert {expert_id} not found in yellow page")
 
         # Create consultation workspace
-        consult_dir = Path("sessions") / session_id / "expert_workspace" / "consultations" / consultation_id
+        consult_dir = self.sessions_root / session_id / "expert_workspace" / "consultations" / consultation_id
         consult_dir.mkdir(parents=True, exist_ok=True)
 
         # Create envelope
@@ -727,7 +727,7 @@ class ConsultationEngine:
             }
 
         # Create consultation workspace
-        consult_dir = Path("sessions") / session_id / "expert_workspace" / "consultations" / consultation_id
+        consult_dir = self.sessions_root / session_id / "expert_workspace" / "consultations" / consultation_id
         consult_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize transcript

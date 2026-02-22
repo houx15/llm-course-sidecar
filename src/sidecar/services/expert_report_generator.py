@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -13,6 +14,7 @@ from ..models.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+SESSIONS_ROOT = Path(os.getenv("SESSIONS_DIR", "sessions"))
 
 
 class ExpertReportGeneratorError(Exception):
@@ -110,7 +112,7 @@ class ExpertReportGenerator:
     def _generate_report_id(self, session_id: str, consultation_id: str) -> str:
         """Generate unique report ID."""
         # Count existing reports for this consultation
-        reports_dir = Path("sessions") / session_id / "expert_reports"
+        reports_dir = SESSIONS_ROOT / session_id / "expert_reports"
         existing = list(reports_dir.glob(f"report_{consultation_id}_*.json"))
         seq = len(existing) + 1
         return f"report_{consultation_id}_{seq:02d}"
@@ -258,7 +260,7 @@ class ExpertReportGenerator:
 
     def _save_report(self, session_id: str, report: ExpertReport) -> None:
         """Save expert report to file."""
-        reports_dir = Path("sessions") / session_id / "expert_reports"
+        reports_dir = SESSIONS_ROOT / session_id / "expert_reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
 
         report_path = reports_dir / f"{report.report_id}.json"
@@ -270,7 +272,7 @@ class ExpertReportGenerator:
 
     def _update_report_index(self, session_id: str, report: ExpertReport) -> None:
         """Update expert reports index."""
-        index_path = Path("sessions") / session_id / "expert_reports" / "index.json"
+        index_path = SESSIONS_ROOT / session_id / "expert_reports" / "index.json"
 
         # Load existing index
         if index_path.exists():

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
+SESSIONS_ROOT = Path(os.getenv("SESSIONS_DIR", "sessions"))
 
 
 class PerformanceTracker:
@@ -180,7 +182,7 @@ class PerformanceTracker:
             metrics: Metrics dictionary
         """
         try:
-            metrics_dir = Path("sessions") / session_id / "performance_metrics"
+            metrics_dir = SESSIONS_ROOT / session_id / "performance_metrics"
             metrics_dir.mkdir(parents=True, exist_ok=True)
 
             turn_index = metrics["turn_index"]
@@ -246,7 +248,7 @@ class PerformanceTracker:
             Session summary dictionary
         """
         try:
-            metrics_dir = Path("sessions") / session_id / "performance_metrics"
+            metrics_dir = SESSIONS_ROOT / session_id / "performance_metrics"
             if not metrics_dir.exists():
                 return {}
 

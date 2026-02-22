@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from .agent_runner import AgentRunner
 from .data_inspector_skills import DataInspectorSkills
 
 logger = logging.getLogger(__name__)
+SESSIONS_ROOT = Path(os.getenv("SESSIONS_DIR", "sessions"))
 
 
 class ExpertRunnerError(Exception):
@@ -572,7 +574,7 @@ class ExpertRunner:
             skill_log: Skill call log data
         """
         try:
-            log_dir = Path("sessions") / session_id / "working_files" / "expert_logs" / expert_id / consultation_id
+            log_dir = SESSIONS_ROOT / session_id / "working_files" / "expert_logs" / expert_id / consultation_id
             log_dir.mkdir(parents=True, exist_ok=True)
 
             # Find next skill call number
