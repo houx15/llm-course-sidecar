@@ -84,7 +84,7 @@ class AgentRunner:
         prompt: str,
         model_class,
         max_retries: int = 1,
-    ):
+    ) -> Tuple:
         """
         Call LLM with retry logic for JSON validation.
 
@@ -94,21 +94,25 @@ class AgentRunner:
             max_retries: Maximum number of retries
 
         Returns:
-            Validated model instance
+            Tuple of (validated_model_instance, usage) where usage has input_tokens and output_tokens
         """
         last_error = None
+        total_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
         for attempt in range(max_retries + 1):
             try:
                 # Add retry message if this is a retry
                 if attempt > 0:
                     retry_prompt = f"{prompt}\n\n---\n\n上一次的JSON输出无效。错误: {last_error}\n\n请重新生成有效的JSON，确保：\n1. JSON格式正确\n2. 包含所有必需字段\n3. 字段类型正确"
-                    response = await self.llm_client.generate(retry_prompt)
+                    response, usage = await self.llm_client.generate(retry_prompt)
                 else:
-                    response = await self.llm_client.generate(prompt)
+                    response, usage = await self.llm_client.generate(prompt)
+
+                total_usage["input_tokens"] += usage.get("input_tokens", 0)
+                total_usage["output_tokens"] += usage.get("output_tokens", 0)
 
                 # Parse and validate
-                return parse_and_validate(response, model_class)
+                return parse_and_validate(response, model_class), total_usage
 
             except JSONValidationError as e:
                 last_error = str(e)
@@ -127,7 +131,7 @@ class AgentRunner:
         instruction_packet: InstructionPacket,
         session_state: SessionState,
         max_retries: int = 1,
-    ) -> TurnOutcome:
+    ) -> Tuple[TurnOutcome, Dict[str, int]]:
         """
         Recover TurnOutcome JSON when CA response lacks valid JSON.
 
@@ -156,7 +160,8 @@ class AgentRunner:
             f"{companion_response}\n"
         )
 
-        return await self._call_llm_with_retry(prompt, TurnOutcome, max_retries=max_retries)
+        result, usage = await self._call_llm_with_retry(prompt, TurnOutcome, max_retries=max_retries)
+        return result, usage
 
     async def run_companion(
         self,
@@ -176,12 +181,12 @@ class AgentRunner:
         uploaded_files_info: str = "",  # v3.2.0: Uploaded files information
         recent_code_executions: str = "",  # v3.3.0: Recent code execution context
         expert_output_summary: Optional[str] = None,  # v3.2.0: Expert consultation results
-    ) -> Tuple[str, TurnOutcome]:
+    ) -> Tuple[str, TurnOutcome, Dict[str, int]]:
         """
         Run Companion Agent.
 
         Returns:
-            Tuple of (companion_response, turn_outcome)
+            Tuple of (companion_response, turn_outcome, usage)
         """
         # Load template
         template = self._load_prompt_template("companion")
@@ -209,7 +214,11 @@ class AgentRunner:
 
         # Call LLM with retry
         try:
-            response = await self.llm_client.generate(prompt)
+            response, usage = await self.llm_client.generate(prompt)
+            total_usage: Dict[str, int] = {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+            }
 
             # Extract companion response (text before JSON block)
             companion_response = response
@@ -222,25 +231,28 @@ class AgentRunner:
             except JSONValidationError as e:
                 logger.warning(f"Failed to parse turn outcome: {e}")
                 try:
-                    turn_outcome = await self._recover_turn_outcome(
+                    turn_outcome, recover_usage = await self._recover_turn_outcome(
                         user_message=user_message,
                         companion_response=companion_response,
                         instruction_packet=instruction_packet,
                         session_state=session_state,
                         max_retries=1,
                     )
+                    total_usage["input_tokens"] += recover_usage.get("input_tokens", 0)
+                    total_usage["output_tokens"] += recover_usage.get("output_tokens", 0)
                 except (LLMError, JSONValidationError) as recover_error:
                     logger.error(f"Failed to recover turn outcome: {recover_error}")
                     turn_outcome = get_default_turn_outcome()
 
-            return companion_response, turn_outcome
+            return companion_response, turn_outcome, total_usage
 
         except (LLMError, JSONValidationError) as e:
             logger.error(f"Companion agent failed: {e}")
             # Return fallback response
             return (
                 "抱歉，我遇到了一些技术问题。请再试一次，或者告诉我你想做什么，我会尽力帮助你。",
-                get_default_turn_outcome()
+                get_default_turn_outcome(),
+                {"input_tokens": 0, "output_tokens": 0},
             )
 
     async def run_memo(
@@ -253,12 +265,12 @@ class AgentRunner:
         dynamic_report_template: str,
         student_error_summary_template: str,
         final_learning_report_template: str,
-    ) -> MemoResult:
+    ) -> Tuple[MemoResult, Dict[str, int]]:
         """
         Run Memo Agent.
 
         Returns:
-            MemoResult with updated report, digest, and error entries
+            Tuple of (MemoResult, usage)
         """
         # Load template
         template = self._load_prompt_template("memo")
@@ -278,8 +290,8 @@ class AgentRunner:
 
         # Call LLM with retry
         try:
-            result = await self._call_llm_with_retry(prompt, MemoResult, max_retries=1)
-            return result
+            result, usage = await self._call_llm_with_retry(prompt, MemoResult, max_retries=1)
+            return result, usage
 
         except (LLMError, JSONValidationError) as e:
             logger.error(f"Memo agent failed: {e}")
@@ -288,7 +300,7 @@ class AgentRunner:
                 updated_report=current_report,
                 digest=get_default_memo_digest(),
                 error_entries=[]
-            )
+            ), {"input_tokens": 0, "output_tokens": 0}
 
     async def run_roadmap_manager(
         self,
@@ -302,7 +314,7 @@ class AgentRunner:
         available_experts: str = "",
         uploaded_files_info: dict = None,  # v3.2.0: Add uploaded files info
         turn_outcome: Optional[TurnOutcome] = None,
-    ) -> RoadmapManagerResult:
+    ) -> Tuple[RoadmapManagerResult, Dict[str, int]]:
         """
         Run Roadmap Manager Agent.
 
@@ -313,7 +325,7 @@ class AgentRunner:
             turn_outcome: CA's current-turn judgment output (optional)
 
         Returns:
-            RoadmapManagerResult with instruction packet and state update
+            Tuple of (RoadmapManagerResult, usage)
         """
         # Load template
         template = self._load_prompt_template("roadmap_manager")
@@ -372,8 +384,8 @@ class AgentRunner:
 
         # Call LLM with retry
         try:
-            result = await self._call_llm_with_retry(prompt, RoadmapManagerResult, max_retries=1)
-            return result
+            result, usage = await self._call_llm_with_retry(prompt, RoadmapManagerResult, max_retries=1)
+            return result, usage
 
         except (LLMError, JSONValidationError) as e:
             logger.error(f"Roadmap manager failed: {e}")
@@ -381,7 +393,7 @@ class AgentRunner:
             return RoadmapManagerResult(
                 instruction_packet=get_default_instruction_packet(),
                 state_update=get_default_state_update()
-            )
+            ), {"input_tokens": 0, "output_tokens": 0}
 
     async def run_roadmap_manager_phase2(
         self,
@@ -422,8 +434,8 @@ class AgentRunner:
 
         # Call LLM with retry
         try:
-            result = await self._call_llm_with_retry(prompt, RoadmapManagerFinalResult, max_retries=1)
-            return result
+            result, usage = await self._call_llm_with_retry(prompt, RoadmapManagerFinalResult, max_retries=1)
+            return result, usage
 
         except (LLMError, JSONValidationError) as e:
             logger.error(f"Roadmap manager phase 2 failed: {e}")
@@ -433,4 +445,4 @@ class AgentRunner:
                 state_update=phase1_result.state_update,
                 expert_consultation_summary="",
                 guidance_for_ca=""
-            )
+            ), {"input_tokens": 0, "output_tokens": 0}

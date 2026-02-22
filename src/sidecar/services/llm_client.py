@@ -1,7 +1,7 @@
 """Multi-provider LLM client with support for Anthropic, OpenAI, and custom APIs."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import httpx
 from ..config import settings
 
@@ -22,7 +22,7 @@ class LLMClient(ABC):
         system_prompt: Optional[str] = None,
         # temperature: float = 0.7,
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> Tuple[str, Dict[str, int]]:
         """
         Generate text from LLM.
 
@@ -33,7 +33,7 @@ class LLMClient(ABC):
             max_tokens: Maximum tokens to generate
 
         Returns:
-            Generated text
+            Tuple of (generated_text, usage) where usage has input_tokens and output_tokens
         """
         pass
 
@@ -54,7 +54,7 @@ class AnthropicClient(LLMClient):
         system_prompt: Optional[str] = None,
         # temperature: float = 0.7,
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> Tuple[str, Dict[str, int]]:
         """Generate text using Anthropic API."""
         headers = {
             "x-api-key": self.api_key,
@@ -86,7 +86,11 @@ class AnthropicClient(LLMClient):
 
                 # Extract text from response
                 if "content" in data and len(data["content"]) > 0:
-                    return data["content"][0]["text"]
+                    usage = data.get("usage", {})
+                    return data["content"][0]["text"], {
+                        "input_tokens": usage.get("input_tokens", 0),
+                        "output_tokens": usage.get("output_tokens", 0),
+                    }
                 else:
                     raise LLMError("No content in response")
 
@@ -114,7 +118,7 @@ class OpenAIClient(LLMClient):
         system_prompt: Optional[str] = None,
         # temperature: float = 0.7,
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> Tuple[str, Dict[str, int]]:
         """Generate text using OpenAI API."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -145,7 +149,11 @@ class OpenAIClient(LLMClient):
 
                 # Extract text from response
                 if "choices" in data and len(data["choices"]) > 0:
-                    return data["choices"][0]["message"]["content"]
+                    usage = data.get("usage", {})
+                    return data["choices"][0]["message"]["content"], {
+                        "input_tokens": usage.get("prompt_tokens", 0),
+                        "output_tokens": usage.get("completion_tokens", 0),
+                    }
                 else:
                     raise LLMError("No choices in response")
 
@@ -171,7 +179,7 @@ class CustomClient(LLMClient):
         system_prompt: Optional[str] = None,
         # temperature: float = 0.7,
         max_tokens: int = 4096,
-    ) -> str:
+    ) -> Tuple[str, Dict[str, int]]:
         """Generate text using custom API (OpenAI-compatible format)."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -215,7 +223,11 @@ class CustomClient(LLMClient):
 
                 # Extract text from response (OpenAI format)
                 if "choices" in data and len(data["choices"]) > 0:
-                    return data["choices"][0]["message"]["content"]
+                    usage = data.get("usage", {})
+                    return data["choices"][0]["message"]["content"], {
+                        "input_tokens": usage.get("prompt_tokens", 0),
+                        "output_tokens": usage.get("completion_tokens", 0),
+                    }
                 else:
                     raise LLMError(f"No choices in response. Response: {data}")
 

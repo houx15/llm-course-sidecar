@@ -73,7 +73,7 @@ async def process_turn_stream(
         current_turn_index = state.turn_index
 
         # STEP 1: Run CA first to judge the current turn
-        ca_response, turn_outcome = await agent_runner.run_companion(
+        ca_response, turn_outcome, ca_usage = await agent_runner.run_companion(
             user_message=user_message,
             instruction_packet=instruction_packet,
             dynamic_report=dynamic_report,
@@ -90,6 +90,13 @@ async def process_turn_stream(
             uploaded_files_info=uploaded_files_info_text,
             recent_code_executions=recent_code_executions_text,
         )
+        yield {
+            "type": "token_usage",
+            "agent": "CA",
+            "turn_index": current_turn_index,
+            "input_tokens": ca_usage.get("input_tokens", 0),
+            "output_tokens": ca_usage.get("output_tokens", 0),
+        }
 
         should_unlock, unlock_reason = _should_unlock_instruction(
             state=state,
@@ -128,7 +135,7 @@ async def process_turn_stream(
 
         # STEP 2: Run RMA (and expert) only if current-turn judgment unlocks
         if should_unlock:
-            rma_result = await agent_runner.run_roadmap_manager(
+            rma_result, rma_usage = await agent_runner.run_roadmap_manager(
                 dynamic_report=dynamic_report,
                 memo_digest=memo_digest,
                 session_state=state,
@@ -140,6 +147,13 @@ async def process_turn_stream(
                 available_experts=available_experts_info,
                 uploaded_files_info=uploaded_files_info,
             )
+            yield {
+                "type": "token_usage",
+                "agent": "RMA",
+                "turn_index": current_turn_index,
+                "input_tokens": rma_usage.get("input_tokens", 0),
+                "output_tokens": rma_usage.get("output_tokens", 0),
+            }
 
             if not rma_result.consultation_request:
                 storage.append_system_event(
@@ -205,12 +219,19 @@ async def process_turn_stream(
                     expert_id = rma_result.consultation_request.expert_id
                     expert_description = _get_expert_description(expert_id)
 
-                    rma_final_result = await agent_runner.run_roadmap_manager_phase2(
+                    rma_final_result, rma_phase2_usage = await agent_runner.run_roadmap_manager_phase2(
                         phase1_result=rma_result,
                         expert_output=consultation_result.get("expert_output", {}),
                         expert_description=expert_description,
                         session_state=state,
                     )
+                    yield {
+                        "type": "token_usage",
+                        "agent": "RMA",
+                        "turn_index": current_turn_index,
+                        "input_tokens": rma_phase2_usage.get("input_tokens", 0),
+                        "output_tokens": rma_phase2_usage.get("output_tokens", 0),
+                    }
 
                     new_instruction = rma_final_result.instruction_packet
                     storage.save_instruction_packet(session_id, new_instruction)
@@ -244,7 +265,7 @@ async def process_turn_stream(
             if rma_final_result:
                 rma_guidance = f"{rma_final_result.expert_consultation_summary}\n\n{rma_final_result.guidance_for_ca}"
 
-            ca_response, turn_outcome = await agent_runner.run_companion(
+            ca_response, turn_outcome, ca2_usage = await agent_runner.run_companion(
                 user_message=user_message,
                 instruction_packet=new_instruction,
                 dynamic_report=dynamic_report,
@@ -262,6 +283,13 @@ async def process_turn_stream(
                 recent_code_executions=recent_code_executions_text,
                 expert_output_summary=rma_guidance,
             )
+            yield {
+                "type": "token_usage",
+                "agent": "CA",
+                "turn_index": current_turn_index,
+                "input_tokens": ca2_usage.get("input_tokens", 0),
+                "output_tokens": ca2_usage.get("output_tokens", 0),
+            }
 
         # STEP 4: Stream CA response to user immediately
         yield {"type": "companion_start"}
@@ -272,7 +300,7 @@ async def process_turn_stream(
         yield {"type": "companion_complete"}
 
         # STEP 5: Run MA in background (non-blocking for user)
-        memo_result = await agent_runner.run_memo(
+        memo_result, ma_usage = await agent_runner.run_memo(
             user_message=user_message,
             companion_response=ca_response,
             turn_outcome=turn_outcome,
@@ -282,6 +310,13 @@ async def process_turn_stream(
             student_error_summary_template=templates.get("student_error_summary_template", ""),
             final_learning_report_template=templates.get("final_learning_report_template", ""),
         )
+        yield {
+            "type": "token_usage",
+            "agent": "MA",
+            "turn_index": current_turn_index,
+            "input_tokens": ma_usage.get("input_tokens", 0),
+            "output_tokens": ma_usage.get("output_tokens", 0),
+        }
 
         # Update state based on unlock and progress
         if should_unlock:
