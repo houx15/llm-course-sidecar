@@ -273,6 +273,10 @@ def _ensure_overlay_templates(curriculum_root: Path) -> None:
         fallback_templates.append(default_curriculum_dir / "_templates")
     if _exists(default_curriculum_dir / "templates"):
         fallback_templates.append(default_curriculum_dir / "templates")
+    # Built-in fallback: templates shipped with the sidecar package itself
+    _builtin = Path(__file__).parent / "default_templates"
+    if _exists(_builtin):
+        fallback_templates.append(_builtin)
 
     for source in fallback_templates:
         target = curriculum_root / source.name
