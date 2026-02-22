@@ -676,7 +676,7 @@ class Orchestrator:
             available_experts_info = self._load_available_experts_info(chapter_id)
 
             from ..models.schemas import MemoDigest
-            rma_result = await self.agent_runner.run_roadmap_manager(
+            rma_result, _ = await self.agent_runner.run_roadmap_manager(
                 dynamic_report="",
                 memo_digest=MemoDigest(**initial_digest),
                 session_state=initial_state,
@@ -929,7 +929,7 @@ class Orchestrator:
 
                 perf_tracker.start_operation("run_roadmap_manager")
                 try:
-                    rma_result = await self.agent_runner.run_roadmap_manager(
+                    rma_result, _ = await self.agent_runner.run_roadmap_manager(
                         dynamic_report=dynamic_report,
                         memo_digest=previous_memo_digest,
                         session_state=state,
