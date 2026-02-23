@@ -947,8 +947,44 @@ async def _sync_turn_to_backend(
         import httpx
 
         async with httpx.AsyncClient(timeout=10.0) as client:
+            backend_session_id = str(cfg.get("backend_session_id") or session_id)
+
+            async def _register_backend_session_if_needed() -> str:
+                chapter_for_register = str(cfg.get("chapter_id") or chapter_id).strip()
+                if not chapter_for_register:
+                    return ""
+                register_resp = await client.post(
+                    f"{base}/v1/chapters/{chapter_for_register}/sessions",
+                    json={"course_id": cfg.get("course_id")},
+                    headers=headers,
+                )
+                if register_resp.status_code not in (200, 201):
+                    logger.warning(
+                        "Backend session register HTTP %d for local session %s: %s",
+                        register_resp.status_code,
+                        session_id,
+                        register_resp.text[:200],
+                    )
+                    return ""
+                payload = register_resp.json() if register_resp.content else {}
+                new_backend_session_id = str(payload.get("session_id") or "").strip()
+                if not new_backend_session_id:
+                    logger.warning(
+                        "Backend session register missing session_id for local session %s",
+                        session_id,
+                    )
+                    return ""
+                cfg["backend_session_id"] = new_backend_session_id
+                session_sync_config[session_id] = cfg
+                logger.info(
+                    "Mapped local session %s -> backend session %s",
+                    session_id,
+                    new_backend_session_id,
+                )
+                return new_backend_session_id
+
             r_turn = await client.post(
-                f"{base}/v1/sessions/{session_id}/turns",
+                f"{base}/v1/sessions/{backend_session_id}/turns",
                 json={
                     "chapter_id": chapter_id,
                     "turn_index": turn_index,
@@ -958,36 +994,54 @@ async def _sync_turn_to_backend(
                 },
                 headers=headers,
             )
+            if r_turn.status_code == 404:
+                recovered_backend_session_id = await _register_backend_session_if_needed()
+                if recovered_backend_session_id:
+                    backend_session_id = recovered_backend_session_id
+                    r_turn = await client.post(
+                        f"{base}/v1/sessions/{backend_session_id}/turns",
+                        json={
+                            "chapter_id": chapter_id,
+                            "turn_index": turn_index,
+                            "user_message": user_message,
+                            "companion_response": companion_response,
+                            "turn_outcome": turn_outcome,
+                        },
+                        headers=headers,
+                    )
             if r_turn.status_code not in (200, 201, 409):
                 logger.warning(
-                    "Backend turn sync HTTP %d for session %s turn %d: %s",
+                    "Backend turn sync HTTP %d for local session %s (backend %s) turn %d: %s",
                     r_turn.status_code,
                     session_id,
+                    backend_session_id,
                     turn_index,
                     r_turn.text[:200],
                 )
             r_mem = await client.put(
-                f"{base}/v1/sessions/{session_id}/memory",
+                f"{base}/v1/sessions/{backend_session_id}/memory",
                 json={"chapter_id": chapter_id, "memory_json": memo_json},
                 headers=headers,
             )
             if r_mem.status_code not in (200, 201):
                 logger.warning(
-                    "Backend memory sync HTTP %d for session %s: %s",
+                    "Backend memory sync HTTP %d for local session %s (backend %s): %s",
                     r_mem.status_code,
                     session_id,
+                    backend_session_id,
                     r_mem.text[:200],
                 )
             r_rep = await client.put(
-                f"{base}/v1/sessions/{session_id}/report",
+                f"{base}/v1/sessions/{backend_session_id}/report",
                 json={"chapter_id": chapter_id, "report_md": report_md},
                 headers=headers,
             )
             if r_rep.status_code not in (200, 201):
                 logger.warning(
-                    "Backend report sync HTTP %d for session %s: %s",
+                    "Backend report sync HTTP %d for local session %s (backend %s): %s",
                     r_rep.status_code,
                     session_id,
+                    backend_session_id,
                     r_rep.text[:200],
                 )
     except Exception as exc:
@@ -1042,9 +1096,15 @@ async def create_session(request: CreateSessionRequest):
         session_orchestrators[session_id] = orchestrator
         _save_session_paths(session_id, curriculum_dir, experts_dir, main_agents_dir)
         if request.backend_url and request.auth_token:
+            chapter_scope = (
+                request.desktop_context.chapter_scope if request.desktop_context else {}
+            )
             session_sync_config[session_id] = {
                 "backend_url": request.backend_url.rstrip("/"),
                 "auth_token": request.auth_token,
+                "backend_session_id": session_id,
+                "course_id": chapter_scope.get("course_id"),
+                "chapter_id": request.chapter_id,
             }
         workspace_info = _copy_chapter_bundle_assets(
             session_id=session_id,
@@ -1097,9 +1157,18 @@ async def reattach_session(session_id: str, request: ReattachSessionRequest):
             raise HTTPException(status_code=404, detail="会话不存在")
 
         if request.backend_url and request.auth_token:
+            chapter_scope = (
+                request.desktop_context.chapter_scope if request.desktop_context else {}
+            )
+            existing_cfg = session_sync_config.get(session_id, {})
             session_sync_config[session_id] = {
                 "backend_url": request.backend_url.rstrip("/"),
                 "auth_token": request.auth_token,
+                "backend_session_id": str(
+                    existing_cfg.get("backend_session_id") or session_id
+                ),
+                "course_id": chapter_scope.get("course_id"),
+                "chapter_id": chapter_id,
             }
 
         if session_id in session_orchestrators:
