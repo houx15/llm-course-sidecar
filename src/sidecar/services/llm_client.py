@@ -75,7 +75,7 @@ class AnthropicClient(LLMClient):
             payload["system"] = system_prompt
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=240.0) as client:
                 response = await client.post(
                     f"{self.base_url}/v1/messages",
                     headers=headers,
@@ -139,7 +139,7 @@ class OpenAIClient(LLMClient):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=240.0) as client:
                 response = await client.post(
                     f"{self.base_url}/v1/chat/completions",
                     headers=headers,
@@ -201,7 +201,7 @@ class CustomClient(LLMClient):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=240.0) as client:
                 response = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers=headers,

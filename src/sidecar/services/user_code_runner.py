@@ -86,14 +86,18 @@ class UserCodeRunner:
                 "cancelled": bool(result.get("cancelled", False)),
                 "execution_time_ms": int(result.get("execution_time_ms", 0)),
             }
-            record_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            record_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
             # Keep only the latest 10 records.
             history_files = sorted(history_dir.glob("run_*.json"), reverse=True)
             for old_file in history_files[10:]:
                 old_file.unlink(missing_ok=True)
         except Exception as exc:
-            logger.warning(f"Failed to persist code history for session {session_id}: {exc}")
+            logger.warning(
+                f"Failed to persist code history for session {session_id}: {exc}"
+            )
 
     def run_python(
         self,
@@ -103,7 +107,7 @@ class UserCodeRunner:
         memory_limit_mb: Optional[int] = None,
         cancel_event: Optional[Event] = None,
     ) -> Dict[str, Any]:
-        timeout_seconds = max(1, min(int(timeout_seconds or 20), 120))
+        timeout_seconds = max(1, min(int(timeout_seconds or 20), 1200))
         workspace = self._workspace_dir(session_id)
         timestamp = int(time.time() * 1000)
         code_file = workspace / f"_run_{timestamp}.py"
