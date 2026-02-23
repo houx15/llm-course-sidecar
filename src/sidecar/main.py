@@ -1094,9 +1094,7 @@ async def create_session(request: CreateSessionRequest):
             experts_dir=experts_dir,
             main_agents_dir=main_agents_dir,
         )
-        auto_session_id = await orchestrator.create_session(
-            request.chapter_id, eager_llm_init=False
-        )
+        auto_session_id = await orchestrator.create_session(request.chapter_id)
         session_id = auto_session_id
         if request.session_id and request.session_id != auto_session_id:
             # Rename session directory to match backend-registered ID
