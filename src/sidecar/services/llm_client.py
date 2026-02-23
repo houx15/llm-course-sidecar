@@ -135,6 +135,7 @@ class OpenAIClient(LLMClient):
             "messages": messages,
             # "temperature": temperature,
             "max_tokens": max_tokens,
+            "thinking": {"type": "disabled"},
         }
 
         try:
@@ -196,6 +197,7 @@ class CustomClient(LLMClient):
             "messages": messages,
             # "temperature": temperature,
             "max_tokens": max_tokens,
+            "thinking": {"type": "disabled"},
         }
 
         try:
