@@ -101,6 +101,28 @@ class ConsultationEngine:
                 return candidate
         return None
 
+    def _resolve_chapter_dir(self, chapter_id: str) -> Path:
+        """
+        Resolve the filesystem path for a chapter.
+
+        Directory layout: curriculum_root/{course_id}/{chapter_id}/
+
+        Accepts:
+          - "course_id/chapter_name"  → curriculum_root/course_id/chapter_name
+          - "chapter_name"            → search all course subdirs for a match
+        """
+        if "/" in chapter_id:
+            course_id, chapter_name = chapter_id.split("/", 1)
+            return self.curriculum_root / course_id / chapter_name
+
+        for course_dir in sorted(self.curriculum_root.iterdir()):
+            if course_dir.is_dir():
+                candidate = course_dir / chapter_id
+                if candidate.exists():
+                    return candidate
+
+        return self.curriculum_root / chapter_id
+
     def _load_consultation_guide(self, chapter_id: str) -> Optional[ConsultationGuide]:
         """
         Load consultation guide for a chapter (v3.0 legacy format).
@@ -112,14 +134,7 @@ class ConsultationEngine:
             ConsultationGuide if found, None otherwise
         """
         try:
-            # Support both new format (course_id/chapter_name) and legacy format
-            if "/" in chapter_id:
-                course_id, chapter_name = chapter_id.split("/", 1)
-                guide_path = (
-                    self.curriculum_root / "courses" / course_id / "chapters" / chapter_name / "consultation_guide.json"
-                )
-            else:
-                guide_path = self.curriculum_root / "chapters" / chapter_id / "consultation_guide.json"
+            guide_path = self._resolve_chapter_dir(chapter_id) / "consultation_guide.json"
 
             if not guide_path.exists():
                 logger.warning(f"Consultation guide not found for chapter: {chapter_id}")
@@ -145,11 +160,7 @@ class ConsultationEngine:
             ConsultationContext (v3.1) or ConsultationGuide (v3.0) if found, None otherwise
         """
         # Determine chapter directory
-        if "/" in chapter_id:
-            course_id, chapter_name = chapter_id.split("/", 1)
-            chapter_dir = self.curriculum_root / "courses" / course_id / "chapters" / chapter_name
-        else:
-            chapter_dir = self.curriculum_root / "chapters" / chapter_id
+        chapter_dir = self._resolve_chapter_dir(chapter_id)
 
         # Try v3.1 hybrid format first (YAML + Markdown)
         yaml_path = chapter_dir / "consultation_config.yaml"

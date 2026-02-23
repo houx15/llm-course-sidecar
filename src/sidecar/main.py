@@ -440,9 +440,22 @@ def _resolve_chapter_workspace(
 ) -> Dict[str, Optional[str]]:
     course_id, chapter_name = _split_chapter_id(chapter_id)
     if course_id:
-        chapter_dir = curriculum_dir / "courses" / course_id / "chapters" / chapter_name
+        # Composite id: try direct layout first, fall back to subdir search
+        chapter_dir = curriculum_dir / course_id / chapter_name
+        if not chapter_dir.exists():
+            chapter_dir = curriculum_dir / "courses" / course_id / "chapters" / chapter_name
     else:
-        chapter_dir = curriculum_dir / "chapters" / chapter_name
+        # Bare chapter name: search all subdirectories (handles overlay `chapters/`
+        # layout and new flat content layout `{course_id}/`)
+        chapter_dir = None
+        for subdir in sorted(curriculum_dir.iterdir()):
+            if subdir.is_dir():
+                candidate = subdir / chapter_name
+                if candidate.exists():
+                    chapter_dir = candidate
+                    break
+        if chapter_dir is None:
+            chapter_dir = curriculum_dir / chapter_name
 
     scripts_dir = chapter_dir / "scripts"
     datasets_dir = chapter_dir / "datasets"

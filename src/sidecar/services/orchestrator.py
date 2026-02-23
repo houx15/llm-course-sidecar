@@ -137,25 +137,41 @@ class Orchestrator:
             self._session_locks[session_id] = asyncio.Lock()
         return self._session_locks[session_id]
 
+    def _resolve_chapter_dir(self, chapter_id: str) -> Path:
+        """
+        Resolve the filesystem path for a chapter.
+
+        Directory layout: curriculum_dir/{course_id}/{chapter_id}/
+
+        Accepts:
+          - "course_id/chapter_name"  → curriculum_dir/course_id/chapter_name
+          - "chapter_name"            → search all course subdirs for a match
+        """
+        if "/" in chapter_id:
+            course_id, chapter_name = chapter_id.split("/", 1)
+            return self.curriculum_dir / course_id / chapter_name
+
+        # No course prefix — walk course subdirectories to find the chapter
+        for course_dir in sorted(self.curriculum_dir.iterdir()):
+            if course_dir.is_dir():
+                candidate = course_dir / chapter_id
+                if candidate.exists():
+                    return candidate
+
+        # Return a non-existent path so the caller can raise a consistent error
+        return self.curriculum_dir / chapter_id
+
     def _load_chapter_content(self, chapter_id: str) -> Dict[str, str]:
         """
         Load all content files for a chapter.
 
         Args:
-            chapter_id: Can be either "course_id/chapter_name" (new format)
-                       or "chapter_name" (legacy format)
+            chapter_id: Can be either "course_id/chapter_name" or bare "chapter_name"
 
         Returns:
             Dictionary with content for each file
         """
-        # Support both new format (course_id/chapter_name) and legacy format (chapter_name)
-        if "/" in chapter_id:
-            # New format: course_id/chapter_name
-            course_id, chapter_name = chapter_id.split("/", 1)
-            chapter_dir = self.curriculum_dir / "courses" / course_id / "chapters" / chapter_name
-        else:
-            # Legacy format: chapter_name (look in old chapters directory)
-            chapter_dir = self.curriculum_dir / "chapters" / chapter_id
+        chapter_dir = self._resolve_chapter_dir(chapter_id)
 
         if not chapter_dir.exists():
             raise OrchestratorError(f"Chapter not found: {chapter_id}")
@@ -193,11 +209,7 @@ class Orchestrator:
         Returns:
             True if any consultation config/guide file exists, False otherwise.
         """
-        if "/" in chapter_id:
-            course_id, chapter_name = chapter_id.split("/", 1)
-            chapter_dir = self.curriculum_dir / "courses" / course_id / "chapters" / chapter_name
-        else:
-            chapter_dir = self.curriculum_dir / "chapters" / chapter_id
+        chapter_dir = self._resolve_chapter_dir(chapter_id)
 
         if not chapter_dir.exists():
             return False
