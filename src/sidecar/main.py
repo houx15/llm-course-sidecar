@@ -129,6 +129,37 @@ def _split_chapter_id(chapter_id: str) -> tuple[str, str]:
     return "", chapter_name
 
 
+def _resolve_bundle_scope_parts(
+    chapter_id: str, desktop_context: Optional[Dict[str, Any]]
+) -> tuple[str, str]:
+    """Resolve bundle lookup scope (course segment + chapter segment).
+
+    Runtime/session IDs should use chapter_id only, but bundle lookup may still
+    require legacy scope_id values like "COURSE_CODE/chapter_code".
+    """
+    runtime_course_id, chapter_name = _split_chapter_id(chapter_id)
+    if runtime_course_id:
+        return runtime_course_id, chapter_name
+
+    scope = str(
+        ((desktop_context or {}).get("chapter_scope") or {}).get("scope_id") or ""
+    ).strip()
+    if "/" not in scope:
+        return "", chapter_name
+
+    raw_scope_course, raw_scope_chapter = scope.split("/", 1)
+    scope_course = _validate_chapter_segment(raw_scope_course, "scope_course_id")
+    scope_chapter = _validate_chapter_segment(raw_scope_chapter, "scope_chapter_name")
+    if scope_chapter != chapter_name:
+        logger.warning(
+            "desktop_context.chapter_scope.scope_id chapter mismatch: %s vs %s",
+            scope_chapter,
+            chapter_name,
+        )
+        return "", chapter_name
+    return scope_course, chapter_name
+
+
 def _exists(path: Optional[Path]) -> bool:
     return bool(path and path.exists())
 
@@ -341,8 +372,13 @@ def _resolve_curriculum_dir(
         return default_curriculum_dir
 
     bundle_root = Path(chapter_bundle_path)
-    course_id, chapter_name = _split_chapter_id(chapter_id)
-    bundle_layout = _resolve_chapter_bundle_layout(bundle_root, course_id, chapter_name)
+    runtime_course_id, _ = _split_chapter_id(chapter_id)
+    bundle_course_id, chapter_name = _resolve_bundle_scope_parts(
+        chapter_id, desktop_context
+    )
+    bundle_layout = _resolve_chapter_bundle_layout(
+        bundle_root, bundle_course_id, chapter_name
+    )
     if not bundle_layout:
         logger.warning(
             f"desktop_context chapter bundle path is set but no chapter files found: {chapter_bundle_path}"
@@ -354,16 +390,20 @@ def _resolve_curriculum_dir(
         filter(
             None,
             [
-                _sanitize_segment(course_id) or "legacy",
+                _sanitize_segment(bundle_course_id or runtime_course_id) or "legacy",
                 _sanitize_segment(chapter_name),
                 fingerprint,
             ],
         )
     )
     overlay_curriculum_root = (overlay_root / overlay_id).resolve()
-    if course_id:
+    if runtime_course_id:
         chapter_target = (
-            overlay_curriculum_root / "courses" / course_id / "chapters" / chapter_name
+            overlay_curriculum_root
+            / "courses"
+            / runtime_course_id
+            / "chapters"
+            / chapter_name
         ).resolve()
     else:
         chapter_target = (overlay_curriculum_root / "chapters" / chapter_name).resolve()
@@ -451,8 +491,12 @@ def _copy_chapter_bundle_assets(
         return workspace_info
 
     bundle_root = Path(chapter_bundle_path)
-    course_id, chapter_name = _split_chapter_id(chapter_id)
-    chapter_dir = _find_chapter_dir_in_bundle(bundle_root, course_id, chapter_name)
+    bundle_course_id, chapter_name = _resolve_bundle_scope_parts(
+        chapter_id, desktop_context
+    )
+    chapter_dir = _find_chapter_dir_in_bundle(
+        bundle_root, bundle_course_id, chapter_name
+    )
     if not chapter_dir:
         return workspace_info
 
