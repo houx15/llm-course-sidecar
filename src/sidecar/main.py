@@ -414,22 +414,31 @@ def _resolve_curriculum_dir(
         raise ValueError(
             "invalid chapter_id: resolved chapter path escapes overlay root"
         )
+    should_rebuild_chapter_target = True
     if chapter_target.exists():
-        shutil.rmtree(chapter_target)
-    chapter_target.mkdir(parents=True, exist_ok=True)
+        has_prompt_files = all(
+            (chapter_target / name).is_file() for name in CHAPTER_PROMPT_FILES
+        )
+        if has_prompt_files:
+            should_rebuild_chapter_target = False
 
-    for name in CHAPTER_PROMPT_FILES:
-        src = bundle_layout.prompts_dir / name
-        if src.exists():
-            shutil.copy2(src, chapter_target / name)
+    if should_rebuild_chapter_target:
+        if chapter_target.exists():
+            shutil.rmtree(chapter_target)
+        chapter_target.mkdir(parents=True, exist_ok=True)
 
-    for src_subdir, subdir_name in (
-        (bundle_layout.scripts_dir, "scripts"),
-        (bundle_layout.datasets_dir, "datasets"),
-        (bundle_layout.assets_dir, "assets"),
-    ):
-        if src_subdir and src_subdir.is_dir():
-            shutil.copytree(src_subdir, chapter_target / subdir_name)
+        for name in CHAPTER_PROMPT_FILES:
+            src = bundle_layout.prompts_dir / name
+            if src.exists():
+                shutil.copy2(src, chapter_target / name)
+
+        for src_subdir, subdir_name in (
+            (bundle_layout.scripts_dir, "scripts"),
+            (bundle_layout.datasets_dir, "datasets"),
+            (bundle_layout.assets_dir, "assets"),
+        ):
+            if src_subdir and src_subdir.is_dir():
+                shutil.copytree(src_subdir, chapter_target / subdir_name)
 
     _ensure_overlay_templates(overlay_curriculum_root)
     return overlay_curriculum_root
@@ -1085,7 +1094,9 @@ async def create_session(request: CreateSessionRequest):
             experts_dir=experts_dir,
             main_agents_dir=main_agents_dir,
         )
-        auto_session_id = await orchestrator.create_session(request.chapter_id)
+        auto_session_id = await orchestrator.create_session(
+            request.chapter_id, eager_llm_init=False
+        )
         session_id = auto_session_id
         if request.session_id and request.session_id != auto_session_id:
             # Rename session directory to match backend-registered ID
@@ -1156,6 +1167,12 @@ async def reattach_session(session_id: str, request: ReattachSessionRequest):
         if not default_orchestrator.storage.session_exists(session_id):
             raise HTTPException(status_code=404, detail="会话不存在")
 
+        desktop_context = (
+            request.desktop_context.model_dump() if request.desktop_context else None
+        )
+        state = default_orchestrator.storage.load_state(session_id)
+        chapter_id = state.chapter_id
+
         if request.backend_url and request.auth_token:
             chapter_scope = (
                 request.desktop_context.chapter_scope if request.desktop_context else {}
@@ -1173,12 +1190,6 @@ async def reattach_session(session_id: str, request: ReattachSessionRequest):
 
         if session_id in session_orchestrators:
             return {"status": "already_attached"}
-
-        desktop_context = (
-            request.desktop_context.model_dump() if request.desktop_context else None
-        )
-        state = default_orchestrator.storage.load_state(session_id)
-        chapter_id = state.chapter_id
 
         curriculum_dir, experts_dir, main_agents_dir = _resolve_runtime_paths(
             chapter_id, desktop_context

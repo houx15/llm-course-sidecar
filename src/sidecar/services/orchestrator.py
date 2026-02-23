@@ -624,16 +624,15 @@ class Orchestrator:
         logger.info(f"Keeping instruction locked (version {current_instruction.instruction_version})")
         return False, "lock_until_not_met"
 
-    async def create_session(self, chapter_id: str) -> str:
+    async def create_session(self, chapter_id: str, eager_llm_init: bool = True) -> str:
         """
         Create new session and initialize with 5-step flow.
 
         Steps:
         1. Load chapter config
         2. Create session folder and initial state
-        3. Call RMA for initial instruction packet
-        4. Call CA for first message
-        5. Call MA to initialize reports
+        3. Fast path: save default instruction/memo and return (no startup LLM calls)
+        4. Optional eager path: call RMA/CA/MA to fully initialize session
 
         Returns:
             Session ID
@@ -670,6 +669,20 @@ class Orchestrator:
 
             self.storage.create_session(session_id, chapter_id, initial_state)
             self.memory_manager.initialize_session(session_id)
+
+            if not eager_llm_init:
+                from .json_utils import (
+                    get_default_instruction_packet,
+                    get_default_memo_digest,
+                )
+
+                self.storage.save_instruction_packet(
+                    session_id, get_default_instruction_packet()
+                )
+                self.storage.save_memo_digest(session_id, get_default_memo_digest())
+                self.storage.save_dynamic_report(session_id, "")
+                logger.info(f"Session created with fast init: {session_id}")
+                return session_id
 
             # Step 3: Call RMA for initial instruction packet
             logger.info("Calling RMA for initial instruction")
