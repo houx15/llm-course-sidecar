@@ -141,25 +141,62 @@ class Orchestrator:
         """
         Resolve the filesystem path for a chapter.
 
-        Directory layout: curriculum_dir/{course_id}/{chapter_id}/
+        Supports multiple layouts:
+        - curriculum/{course_id}/{chapter_name}
+        - curriculum/courses/{course_id}/chapters/{chapter_name}
+        - curriculum/chapters/{chapter_name}
 
         Accepts:
           - "course_id/chapter_name"  → curriculum_dir/course_id/chapter_name
-          - "chapter_name"            → search all course subdirs for a match
+          - "chapter_name"            → search common curriculum layouts for a match
         """
         if "/" in chapter_id:
             course_id, chapter_name = chapter_id.split("/", 1)
-            return self.curriculum_dir / course_id / chapter_name
+            candidates = [
+                self.curriculum_dir / course_id / chapter_name,
+                self.curriculum_dir / "courses" / course_id / "chapters" / chapter_name,
+                self.curriculum_dir
+                / "content"
+                / "curriculum"
+                / "courses"
+                / course_id
+                / "chapters"
+                / chapter_name,
+                self.curriculum_dir / "chapters" / chapter_name,
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
+            return candidates[0]
+
+        chapter_name = chapter_id
+
+        direct_candidates = [
+            self.curriculum_dir / chapter_name,
+            self.curriculum_dir / "chapters" / chapter_name,
+        ]
+        for candidate in direct_candidates:
+            if candidate.exists():
+                return candidate
+
+        courses_root = self.curriculum_dir / "courses"
+        if courses_root.exists():
+            for course_dir in sorted(courses_root.iterdir()):
+                if not course_dir.is_dir():
+                    continue
+                candidate = course_dir / "chapters" / chapter_name
+                if candidate.exists():
+                    return candidate
 
         # No course prefix — walk course subdirectories to find the chapter
         for course_dir in sorted(self.curriculum_dir.iterdir()):
             if course_dir.is_dir():
-                candidate = course_dir / chapter_id
+                candidate = course_dir / chapter_name
                 if candidate.exists():
                     return candidate
 
         # Return a non-existent path so the caller can raise a consistent error
-        return self.curriculum_dir / chapter_id
+        return self.curriculum_dir / chapter_name
 
     def _load_chapter_content(self, chapter_id: str) -> Dict[str, str]:
         """
