@@ -35,7 +35,10 @@ if _log_file:
         _fh.setLevel(logging.DEBUG)
         logging.getLogger().addHandler(_fh)
     except Exception as _log_err:
-        print(f"[sidecar] WARNING: could not open log file {_log_file!r}: {_log_err}", flush=True)
+        print(
+            f"[sidecar] WARNING: could not open log file {_log_file!r}: {_log_err}",
+            flush=True,
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -547,9 +550,12 @@ notebook_manager = NotebookManager()
 MAX_WORKSPACE_FILE_SIZE_BYTES = 1 * 1024 * 1024
 
 
-def _save_session_paths(session_id: str, curriculum_dir: Path, experts_dir: Path, main_agents_dir: Path) -> None:
+def _save_session_paths(
+    session_id: str, curriculum_dir: Path, experts_dir: Path, main_agents_dir: Path
+) -> None:
     """Persist resolved runtime paths so the orchestrator can be rebuilt after restart."""
     import json
+
     session_dir = sessions_root / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
     paths = {
@@ -566,6 +572,7 @@ def _get_orchestrator(session_id: str) -> Orchestrator:
 
     # Try to rebuild from persisted paths after a sidecar restart
     import json
+
     paths_file = sessions_root / session_id / "session_paths.json"
     if paths_file.exists():
         try:
@@ -576,7 +583,9 @@ def _get_orchestrator(session_id: str) -> Orchestrator:
                 main_agents_dir=Path(paths["main_agents_dir"]),
             )
             session_orchestrators[session_id] = orchestrator
-            logger.info(f"Rebuilt orchestrator for session {session_id} from persisted paths")
+            logger.info(
+                f"Rebuilt orchestrator for session {session_id} from persisted paths"
+            )
             return orchestrator
         except Exception as e:
             logger.warning(f"Failed to rebuild orchestrator for {session_id}: {e}")
@@ -817,7 +826,7 @@ class RunCodeRequest(BaseModel):
 
     code: str = Field(..., min_length=1, max_length=20000)
     timeout_seconds: int = Field(default=20, ge=1, le=120)
-    memory_limit_mb: Optional[int] = Field(default=None, ge=64, le=8192)
+    memory_limit_mb: Optional[int] = Field(default=None, ge=64, le=16384)
 
 
 class RunCodeResponse(BaseModel):
@@ -836,7 +845,7 @@ class CreateCodeJobRequest(BaseModel):
 
     code: str = Field(..., min_length=1, max_length=20000)
     timeout_seconds: int = Field(default=20, ge=1, le=120)
-    memory_limit_mb: Optional[int] = Field(default=None, ge=64, le=8192)
+    memory_limit_mb: Optional[int] = Field(default=None, ge=64, le=16384)
 
 
 class CodeJobSummary(BaseModel):
@@ -923,6 +932,7 @@ async def _sync_turn_to_backend(
     headers = {"Authorization": f"Bearer {cfg['auth_token']}"}
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(
                 f"{base}/v1/sessions/{session_id}/turns",
@@ -946,7 +956,12 @@ async def _sync_turn_to_backend(
                 headers=headers,
             )
     except Exception as exc:
-        logger.warning("Backend sync failed for session %s turn %d: %s", session_id, turn_index, exc)
+        logger.warning(
+            "Backend sync failed for session %s turn %d: %s",
+            session_id,
+            turn_index,
+            exc,
+        )
 
 
 # API Endpoints
@@ -1131,16 +1146,18 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
                     _report_md = orchestrator.storage.load_dynamic_report(session_id)
                 except Exception:
                     pass
-                asyncio.create_task(_sync_turn_to_backend(
-                    session_id=session_id,
-                    chapter_id=_state.chapter_id,
-                    turn_index=_state.turn_index,
-                    user_message=_latest.get("user_message", ""),
-                    companion_response=_latest.get("companion_response", ""),
-                    turn_outcome=_latest.get("turn_outcome", {}),
-                    memo_json=_memo if isinstance(_memo, dict) else {},
-                    report_md=_report_md,
-                ))
+                asyncio.create_task(
+                    _sync_turn_to_backend(
+                        session_id=session_id,
+                        chapter_id=_state.chapter_id,
+                        turn_index=_state.turn_index,
+                        user_message=_latest.get("user_message", ""),
+                        companion_response=_latest.get("companion_response", ""),
+                        turn_outcome=_latest.get("turn_outcome", {}),
+                        memo_json=_memo if isinstance(_memo, dict) else {},
+                        report_md=_report_md,
+                    )
+                )
             except Exception as _exc:
                 logger.warning("Failed to schedule backend sync: %s", _exc)
 
