@@ -947,7 +947,7 @@ async def _sync_turn_to_backend(
         import httpx
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
+            r_turn = await client.post(
                 f"{base}/v1/sessions/{session_id}/turns",
                 json={
                     "chapter_id": chapter_id,
@@ -958,16 +958,38 @@ async def _sync_turn_to_backend(
                 },
                 headers=headers,
             )
-            await client.put(
+            if r_turn.status_code not in (200, 201, 409):
+                logger.warning(
+                    "Backend turn sync HTTP %d for session %s turn %d: %s",
+                    r_turn.status_code,
+                    session_id,
+                    turn_index,
+                    r_turn.text[:200],
+                )
+            r_mem = await client.put(
                 f"{base}/v1/sessions/{session_id}/memory",
                 json={"chapter_id": chapter_id, "memory_json": memo_json},
                 headers=headers,
             )
-            await client.put(
+            if r_mem.status_code not in (200, 201):
+                logger.warning(
+                    "Backend memory sync HTTP %d for session %s: %s",
+                    r_mem.status_code,
+                    session_id,
+                    r_mem.text[:200],
+                )
+            r_rep = await client.put(
                 f"{base}/v1/sessions/{session_id}/report",
                 json={"chapter_id": chapter_id, "report_md": report_md},
                 headers=headers,
             )
+            if r_rep.status_code not in (200, 201):
+                logger.warning(
+                    "Backend report sync HTTP %d for session %s: %s",
+                    r_rep.status_code,
+                    session_id,
+                    r_rep.text[:200],
+                )
     except Exception as exc:
         logger.warning(
             "Backend sync failed for session %s turn %d: %s",
@@ -1057,6 +1079,8 @@ async def create_session(request: CreateSessionRequest):
 
 class ReattachSessionRequest(BaseModel):
     desktop_context: Optional[DesktopContext] = None
+    backend_url: Optional[str] = None
+    auth_token: Optional[str] = None
 
 
 @app.post("/api/session/{session_id}/reattach")
@@ -1071,6 +1095,12 @@ async def reattach_session(session_id: str, request: ReattachSessionRequest):
     try:
         if not default_orchestrator.storage.session_exists(session_id):
             raise HTTPException(status_code=404, detail="会话不存在")
+
+        if request.backend_url and request.auth_token:
+            session_sync_config[session_id] = {
+                "backend_url": request.backend_url.rstrip("/"),
+                "auth_token": request.auth_token,
+            }
 
         if session_id in session_orchestrators:
             return {"status": "already_attached"}
@@ -1163,7 +1193,9 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
                     _sync_turn_to_backend(
                         session_id=session_id,
                         chapter_id=_state.chapter_id,
-                        turn_index=_state.turn_index,
+                        turn_index=int(
+                            _latest.get("turn_index", max(_state.turn_index - 1, 0))
+                        ),
                         user_message=_latest.get("user_message", ""),
                         companion_response=_latest.get("companion_response", ""),
                         turn_outcome=_latest.get("turn_outcome", {}),
