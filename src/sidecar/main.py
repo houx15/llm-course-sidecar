@@ -945,6 +945,7 @@ async def _sync_turn_to_backend(
     turn_outcome: dict,
     memo_json: dict,
     report_md: str,
+    agent_state: dict | None = None,
 ) -> None:
     """Best-effort post-turn sync to backend. Failures are logged but never raised."""
     cfg = session_sync_config.get(session_id)
@@ -1027,9 +1028,12 @@ async def _sync_turn_to_backend(
                     turn_index,
                     r_turn.text[:200],
                 )
+            mem_payload = {"chapter_id": chapter_id, "memory_json": memo_json}
+            if agent_state:
+                mem_payload["agent_state"] = agent_state
             r_mem = await client.put(
                 f"{base}/v1/sessions/{backend_session_id}/memory",
-                json={"chapter_id": chapter_id, "memory_json": memo_json},
+                json=mem_payload,
                 headers=headers,
             )
             if r_mem.status_code not in (200, 201):
@@ -1267,6 +1271,23 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
                     _report_md = orchestrator.storage.load_dynamic_report(session_id)
                 except Exception:
                     pass
+                # Collect agent state for backend sync
+                _agent_state = {}
+                try:
+                    _agent_state["session_state"] = _state.model_dump()
+                except Exception:
+                    pass
+                try:
+                    _ip = orchestrator.storage.load_instruction_packet(session_id)
+                    _agent_state["instruction_packet"] = _ip.model_dump()
+                except Exception:
+                    pass
+                try:
+                    _err_summary = orchestrator.storage.load_student_error_summary(session_id)
+                    if _err_summary:
+                        _agent_state["student_error_summary"] = _err_summary
+                except Exception:
+                    pass
                 asyncio.create_task(
                     _sync_turn_to_backend(
                         session_id=session_id,
@@ -1279,6 +1300,7 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
                         turn_outcome=_latest.get("turn_outcome", {}),
                         memo_json=_memo if isinstance(_memo, dict) else {},
                         report_md=_report_md,
+                        agent_state=_agent_state if _agent_state else None,
                     )
                 )
             except Exception as _exc:
