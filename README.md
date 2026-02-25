@@ -125,4 +125,4 @@ git push && git push --tags
 
 - `llm-course-desktop`: downloads and launches sidecar runtime bundles
 - `llm-course-backend`: provides bundle registry and OSS credential endpoints
-- `demo`: legacy source for logic extraction; not production deployment target
+
