@@ -2,11 +2,12 @@ name: Build & Upload Sidecar Bundle
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - 'src/**'
       - 'pyproject.toml'
       - 'scripts/build_sidecar_code_bundle.py'
+    tags: ['v*']
 
 jobs:
   build-and-upload:
@@ -23,22 +24,37 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Determine environment
+        id: env
+        run: |
+          REF="${GITHUB_REF}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            echo "environment=prod" >> "$GITHUB_OUTPUT"
+            echo "Trigger: tag ${GITHUB_REF_NAME} → prod"
+          else
+            echo "environment=dev" >> "$GITHUB_OUTPUT"
+            echo "Trigger: branch ${GITHUB_REF_NAME} → dev"
+          fi
+
       - name: Compute version
         id: version
         run: |
-          # Read base version from pyproject.toml (Python 3.11 tomllib, stdlib)
-          BASE_VERSION=$(python3 -c "
+          ENV="${{ steps.env.outputs.environment }}"
+
+          if [[ "$ENV" == "prod" ]]; then
+            # For tags, use the tag as version (strip leading 'v')
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            # For dev, use pyproject.toml base version + commit count
+            BASE_VERSION=$(python3 -c "
           import tomllib
           with open('pyproject.toml', 'rb') as f:
               data = tomllib.load(f)
           print(data['project']['version'])
           ")
-
-          # Use total commit count as a monotonically increasing build number
-          COMMIT_COUNT=$(git rev-list --count HEAD)
-
-          # Final version: e.g. 0.1.0-build.42
-          VERSION="${BASE_VERSION}-build.${COMMIT_COUNT}"
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+            VERSION="${BASE_VERSION}-dev.${COMMIT_COUNT}"
+          fi
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Computed version: ${VERSION}"
@@ -51,14 +67,21 @@ jobs:
             --output /tmp/
 
       - name: Upload bundle to backend
-        env:
-          ADMIN_KEY: ${{ secrets.SIDECAR_ADMIN_KEY }}
-          BACKEND_URL: ${{ secrets.SIDECAR_BACKEND_URL }}
         run: |
+          ENV="${{ steps.env.outputs.environment }}"
+
+          if [[ "$ENV" == "dev" ]]; then
+            BACKEND_URL="${{ secrets.SIDECAR_BACKEND_URL_DEV }}"
+            ADMIN_KEY="${{ secrets.SIDECAR_ADMIN_KEY_DEV }}"
+          else
+            BACKEND_URL="${{ secrets.SIDECAR_BACKEND_URL }}"
+            ADMIN_KEY="${{ secrets.SIDECAR_ADMIN_KEY }}"
+          fi
+
           VERSION="${{ steps.version.outputs.version }}"
           BUNDLE_FILE="/tmp/sidecar_code_${VERSION}.tar.gz"
 
-          echo "Uploading ${BUNDLE_FILE} to ${BACKEND_URL} ..."
+          echo "Uploading ${BUNDLE_FILE} to ${BACKEND_URL} (${ENV}) ..."
 
           HTTP_STATUS=$(curl -s -o /tmp/upload_response.json -w "%{http_code}" \
             -X POST "${BACKEND_URL}/v1/admin/bundles/upload" \
