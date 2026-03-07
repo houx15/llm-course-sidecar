@@ -2,11 +2,6 @@ name: Build & Upload Sidecar Bundle
 
 on:
   push:
-    branches: [dev]
-    paths:
-      - 'src/**'
-      - 'pyproject.toml'
-      - 'scripts/build_sidecar_code_bundle.py'
     tags: ['v*']
 
 jobs:
@@ -27,35 +22,21 @@ jobs:
       - name: Determine environment
         id: env
         run: |
-          REF="${GITHUB_REF}"
-          if [[ "$REF" == refs/tags/v* ]]; then
-            echo "environment=prod" >> "$GITHUB_OUTPUT"
-            echo "Trigger: tag ${GITHUB_REF_NAME} → prod"
-          else
+          TAG="${GITHUB_REF_NAME}"
+          # Tags containing -dev → dev environment, otherwise → prod
+          if [[ "$TAG" == *-dev* ]]; then
             echo "environment=dev" >> "$GITHUB_OUTPUT"
-            echo "Trigger: branch ${GITHUB_REF_NAME} → dev"
+            echo "Trigger: tag ${TAG} → dev"
+          else
+            echo "environment=prod" >> "$GITHUB_OUTPUT"
+            echo "Trigger: tag ${TAG} → prod"
           fi
 
       - name: Compute version
         id: version
         run: |
-          ENV="${{ steps.env.outputs.environment }}"
-
-          if [[ "$ENV" == "prod" ]]; then
-            # For tags, use the tag as version (strip leading 'v')
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            # For dev, use pyproject.toml base version + commit count
-            BASE_VERSION=$(python3 -c "
-          import tomllib
-          with open('pyproject.toml', 'rb') as f:
-              data = tomllib.load(f)
-          print(data['project']['version'])
-          ")
-            COMMIT_COUNT=$(git rev-list --count HEAD)
-            VERSION="${BASE_VERSION}-dev.${COMMIT_COUNT}"
-          fi
-
+          # Strip leading 'v' from tag name
+          VERSION="${GITHUB_REF_NAME#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Computed version: ${VERSION}"
 
