@@ -7,6 +7,7 @@ from typing import AsyncGenerator, Dict, Optional, Any
 from .storage import Storage
 from .memory_manager import MemoryManager
 from .agent_runner import AgentRunner
+from .llm_client import LLMError
 from ..models.schemas import InstructionPacket
 
 logger = logging.getLogger(__name__)
@@ -73,23 +74,28 @@ async def process_turn_stream(
         current_turn_index = state.turn_index
 
         # STEP 1: Run CA first to judge the current turn
-        ca_response, turn_outcome, ca_usage = await agent_runner.run_companion(
-            user_message=user_message,
-            instruction_packet=instruction_packet,
-            dynamic_report=dynamic_report,
-            session_state=state,
-            chapter_context=chapter_content.get("chapter_context", ""),
-            task_list=chapter_content.get("task_list", ""),
-            task_completion_principles=chapter_content.get("task_completion_principles", ""),
-            interaction_protocol=chapter_content.get("interaction_protocol", ""),
-            socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-            memory_long_term=memory_sections["long_term"],
-            memory_mid_term=memory_sections["mid_term"],
-            memory_recent_turns=memory_sections["recent_turns"],
-            available_experts_info=available_experts_info,
-            uploaded_files_info=uploaded_files_info_text,
-            recent_code_executions=recent_code_executions_text,
-        )
+        try:
+            ca_response, turn_outcome, ca_usage = await agent_runner.run_companion(
+                user_message=user_message,
+                instruction_packet=instruction_packet,
+                dynamic_report=dynamic_report,
+                session_state=state,
+                chapter_context=chapter_content.get("chapter_context", ""),
+                task_list=chapter_content.get("task_list", ""),
+                task_completion_principles=chapter_content.get("task_completion_principles", ""),
+                interaction_protocol=chapter_content.get("interaction_protocol", ""),
+                socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
+                memory_long_term=memory_sections["long_term"],
+                memory_mid_term=memory_sections["mid_term"],
+                memory_recent_turns=memory_sections["recent_turns"],
+                available_experts_info=available_experts_info,
+                uploaded_files_info=uploaded_files_info_text,
+                recent_code_executions=recent_code_executions_text,
+            )
+        except LLMError as e:
+            logger.error(f"LLM error in CA step 1: {e}")
+            yield {"type": "llm_error", "error": str(e)}
+            return
         yield {
             "type": "token_usage",
             "agent": "CA",
@@ -265,24 +271,29 @@ async def process_turn_stream(
             if rma_final_result:
                 rma_guidance = f"{rma_final_result.expert_consultation_summary}\n\n{rma_final_result.guidance_for_ca}"
 
-            ca_response, turn_outcome, ca2_usage = await agent_runner.run_companion(
-                user_message=user_message,
-                instruction_packet=new_instruction,
-                dynamic_report=dynamic_report,
-                session_state=state,
-                chapter_context=chapter_content.get("chapter_context", ""),
-                task_list=chapter_content.get("task_list", ""),
-                task_completion_principles=chapter_content.get("task_completion_principles", ""),
-                interaction_protocol=chapter_content.get("interaction_protocol", ""),
-                socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-                memory_long_term=memory_sections["long_term"],
-                memory_mid_term=memory_sections["mid_term"],
-                memory_recent_turns=memory_sections["recent_turns"],
-                available_experts_info=available_experts_info,
-                uploaded_files_info=uploaded_files_info_text,
-                recent_code_executions=recent_code_executions_text,
-                expert_output_summary=rma_guidance,
-            )
+            try:
+                ca_response, turn_outcome, ca2_usage = await agent_runner.run_companion(
+                    user_message=user_message,
+                    instruction_packet=new_instruction,
+                    dynamic_report=dynamic_report,
+                    session_state=state,
+                    chapter_context=chapter_content.get("chapter_context", ""),
+                    task_list=chapter_content.get("task_list", ""),
+                    task_completion_principles=chapter_content.get("task_completion_principles", ""),
+                    interaction_protocol=chapter_content.get("interaction_protocol", ""),
+                    socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
+                    memory_long_term=memory_sections["long_term"],
+                    memory_mid_term=memory_sections["mid_term"],
+                    memory_recent_turns=memory_sections["recent_turns"],
+                    available_experts_info=available_experts_info,
+                    uploaded_files_info=uploaded_files_info_text,
+                    recent_code_executions=recent_code_executions_text,
+                    expert_output_summary=rma_guidance,
+                )
+            except LLMError as e:
+                logger.error(f"LLM error in CA step 2: {e}")
+                yield {"type": "llm_error", "error": str(e)}
+                return
             yield {
                 "type": "token_usage",
                 "agent": "CA",

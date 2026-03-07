@@ -248,12 +248,7 @@ class AgentRunner:
 
         except (LLMError, JSONValidationError) as e:
             logger.error(f"Companion agent failed: {e}")
-            # Return fallback response
-            return (
-                "抱歉，我遇到了一些技术问题。请再试一次，或者告诉我你想做什么，我会尽力帮助你。",
-                get_default_turn_outcome(),
-                {"input_tokens": 0, "output_tokens": 0},
-            )
+            raise LLMError(str(e)) from e
 
     async def run_memo(
         self,
