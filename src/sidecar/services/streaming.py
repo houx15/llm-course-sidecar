@@ -85,6 +85,9 @@ async def process_turn_stream(
 
         current_turn_index = state.turn_index
 
+        # Accumulate token usage across all agent calls in this turn
+        turn_token_usage: Dict[str, Dict[str, int]] = {}
+
         # Check cancellation before starting expensive LLM calls
         _check_cancelled(cancel_event)
 
@@ -111,13 +114,18 @@ async def process_turn_stream(
             logger.error(f"LLM error in CA step 1: {e}")
             yield {"type": "llm_error", "error": str(e)}
             return
+        ca_input = ca_usage.get("input_tokens", 0)
+        ca_output = ca_usage.get("output_tokens", 0)
         yield {
             "type": "token_usage",
             "agent": "CA",
             "turn_index": current_turn_index,
-            "input_tokens": ca_usage.get("input_tokens", 0),
-            "output_tokens": ca_usage.get("output_tokens", 0),
+            "input_tokens": ca_input,
+            "output_tokens": ca_output,
         }
+        turn_token_usage.setdefault("CA", {"input_tokens": 0, "output_tokens": 0})
+        turn_token_usage["CA"]["input_tokens"] += ca_input
+        turn_token_usage["CA"]["output_tokens"] += ca_output
 
         should_unlock, unlock_reason = _should_unlock_instruction(
             state=state,
@@ -171,13 +179,18 @@ async def process_turn_stream(
                 available_experts=available_experts_info,
                 uploaded_files_info=uploaded_files_info,
             )
+            rma_input = rma_usage.get("input_tokens", 0)
+            rma_output = rma_usage.get("output_tokens", 0)
             yield {
                 "type": "token_usage",
                 "agent": "RMA",
                 "turn_index": current_turn_index,
-                "input_tokens": rma_usage.get("input_tokens", 0),
-                "output_tokens": rma_usage.get("output_tokens", 0),
+                "input_tokens": rma_input,
+                "output_tokens": rma_output,
             }
+            turn_token_usage.setdefault("RMA", {"input_tokens": 0, "output_tokens": 0})
+            turn_token_usage["RMA"]["input_tokens"] += rma_input
+            turn_token_usage["RMA"]["output_tokens"] += rma_output
 
             if not rma_result.consultation_request:
                 storage.append_system_event(
@@ -249,13 +262,18 @@ async def process_turn_stream(
                         expert_description=expert_description,
                         session_state=state,
                     )
+                    rma2_input = rma_phase2_usage.get("input_tokens", 0)
+                    rma2_output = rma_phase2_usage.get("output_tokens", 0)
                     yield {
                         "type": "token_usage",
                         "agent": "RMA",
                         "turn_index": current_turn_index,
-                        "input_tokens": rma_phase2_usage.get("input_tokens", 0),
-                        "output_tokens": rma_phase2_usage.get("output_tokens", 0),
+                        "input_tokens": rma2_input,
+                        "output_tokens": rma2_output,
                     }
+                    turn_token_usage.setdefault("RMA", {"input_tokens": 0, "output_tokens": 0})
+                    turn_token_usage["RMA"]["input_tokens"] += rma2_input
+                    turn_token_usage["RMA"]["output_tokens"] += rma2_output
 
                     new_instruction = rma_final_result.instruction_packet
                     storage.save_instruction_packet(session_id, new_instruction)
@@ -312,13 +330,18 @@ async def process_turn_stream(
                 logger.error(f"LLM error in CA step 2: {e}")
                 yield {"type": "llm_error", "error": str(e)}
                 return
+            ca2_input = ca2_usage.get("input_tokens", 0)
+            ca2_output = ca2_usage.get("output_tokens", 0)
             yield {
                 "type": "token_usage",
                 "agent": "CA",
                 "turn_index": current_turn_index,
-                "input_tokens": ca2_usage.get("input_tokens", 0),
-                "output_tokens": ca2_usage.get("output_tokens", 0),
+                "input_tokens": ca2_input,
+                "output_tokens": ca2_output,
             }
+            turn_token_usage.setdefault("CA", {"input_tokens": 0, "output_tokens": 0})
+            turn_token_usage["CA"]["input_tokens"] += ca2_input
+            turn_token_usage["CA"]["output_tokens"] += ca2_output
 
         # STEP 4: Stream CA response to user immediately
         _check_cancelled(cancel_event)
@@ -347,13 +370,18 @@ async def process_turn_stream(
             student_error_summary_template=templates.get("student_error_summary_template", ""),
             final_learning_report_template=templates.get("final_learning_report_template", ""),
         )
+        ma_input = ma_usage.get("input_tokens", 0)
+        ma_output = ma_usage.get("output_tokens", 0)
         yield {
             "type": "token_usage",
             "agent": "MA",
             "turn_index": current_turn_index,
-            "input_tokens": ma_usage.get("input_tokens", 0),
-            "output_tokens": ma_usage.get("output_tokens", 0),
+            "input_tokens": ma_input,
+            "output_tokens": ma_output,
         }
+        turn_token_usage.setdefault("MA", {"input_tokens": 0, "output_tokens": 0})
+        turn_token_usage["MA"]["input_tokens"] += ma_input
+        turn_token_usage["MA"]["output_tokens"] += ma_output
 
         # Update state based on unlock and progress
         if should_unlock:
@@ -373,13 +401,14 @@ async def process_turn_stream(
         state.turn_index = current_turn_index + 1
         storage.save_state(session_id, state)
 
-        # Save turn data
+        # Save turn data (including accumulated token usage)
         storage.save_turn(
             session_id=session_id,
             turn_index=current_turn_index,
             user_message=user_message,
             companion_response=ca_response,
             turn_outcome=turn_outcome.model_dump(),
+            token_usage=turn_token_usage if turn_token_usage else None,
         )
 
         # Save updated report

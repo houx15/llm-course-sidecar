@@ -258,6 +258,7 @@ class Storage:
         user_message: str,
         companion_response: str,
         turn_outcome: Dict,
+        token_usage: Dict | None = None,
     ) -> None:
         """
         Save turn history files.
@@ -268,6 +269,7 @@ class Storage:
             user_message: User's message
             companion_response: Companion's response
             turn_outcome: Turn outcome data
+            token_usage: Optional token usage data (input/output totals per agent)
         """
         turns_dir = self._get_turns_dir(session_id)
 
@@ -287,6 +289,11 @@ class Storage:
         # Save turn outcome
         outcome_file = turns_dir / f"{turn_str}_turn_outcome.json"
         self._write_json(outcome_file, turn_outcome)
+
+        # Save token usage if provided
+        if token_usage:
+            usage_file = turns_dir / f"{turn_str}_token_usage.json"
+            self._write_json(usage_file, token_usage)
 
     def load_turn_history(self, session_id: str) -> List[Dict]:
         """
@@ -318,12 +325,20 @@ class Storage:
 
             turn_outcome = self._read_json(outcome_file)
 
-            history.append({
+            # Load token usage if available
+            usage_file = turns_dir / f"{turn_str}_token_usage.json"
+            token_usage = self._read_json(usage_file) if usage_file.exists() else None
+
+            entry = {
                 "turn_index": int(turn_str),
                 "user_message": user_message,
                 "companion_response": companion_response,
                 "turn_outcome": turn_outcome,
-            })
+            }
+            if token_usage:
+                entry["token_usage"] = token_usage
+
+            history.append(entry)
 
         return history
 
