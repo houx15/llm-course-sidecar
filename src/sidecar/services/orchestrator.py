@@ -1428,7 +1428,7 @@ class Orchestrator:
             logger.error(f"Failed to end session: {e}")
             raise OrchestratorError(f"结束会话失败: {e}")
 
-    async def process_turn_stream(self, session_id: str, user_message: str):
+    async def process_turn_stream(self, session_id: str, user_message: str, cancel_event=None):
         """
         Process a turn with streaming output.
 
@@ -1487,5 +1487,6 @@ class Orchestrator:
             consultation_guide_text=consultation_guide_text,
             uploaded_files_info=uploaded_files_info,
             consultation_engine=self.consultation_engine,
+            cancel_event=cancel_event,
         ):
             yield event

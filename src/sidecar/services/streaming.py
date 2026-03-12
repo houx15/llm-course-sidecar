@@ -13,6 +13,17 @@ from ..models.schemas import InstructionPacket
 logger = logging.getLogger(__name__)
 
 
+class TurnCancelled(Exception):
+    """Raised when the user cancels the current turn mid-stream."""
+    pass
+
+
+def _check_cancelled(cancel_event: Optional[asyncio.Event]) -> None:
+    """Raise TurnCancelled if the cancel event has been set."""
+    if cancel_event is not None and cancel_event.is_set():
+        raise TurnCancelled()
+
+
 async def process_turn_stream(
     session_id: str,
     user_message: str,
@@ -27,6 +38,7 @@ async def process_turn_stream(
     consultation_guide_text: str = "",
     uploaded_files_info: Optional[Dict[str, Any]] = None,
     consultation_engine: Optional[Any] = None,
+    cancel_event: Optional[asyncio.Event] = None,
 ) -> AsyncGenerator[Dict, None]:
     """
     Process a turn with streaming output.
@@ -72,6 +84,9 @@ async def process_turn_stream(
         }
 
         current_turn_index = state.turn_index
+
+        # Check cancellation before starting expensive LLM calls
+        _check_cancelled(cancel_event)
 
         # STEP 1: Run CA first to judge the current turn
         try:
@@ -138,6 +153,9 @@ async def process_turn_stream(
 
         rma_final_result = None
         new_instruction = instruction_packet
+
+        # Check cancellation before RMA (expensive multi-agent step)
+        _check_cancelled(cancel_event)
 
         # STEP 2: Run RMA (and expert) only if current-turn judgment unlocks
         if should_unlock:
@@ -303,12 +321,20 @@ async def process_turn_stream(
             }
 
         # STEP 4: Stream CA response to user immediately
+        _check_cancelled(cancel_event)
         yield {"type": "companion_start"}
         for char in ca_response:
+            # Check cancellation periodically during streaming (every ~50 chars)
+            if cancel_event is not None and cancel_event.is_set():
+                yield {"type": "companion_complete"}
+                raise TurnCancelled()
             yield {"type": "companion_chunk", "content": char}
             await asyncio.sleep(0.02)
 
         yield {"type": "companion_complete"}
+
+        # Check cancellation before running MA (saves us an LLM call)
+        _check_cancelled(cancel_event)
 
         # STEP 5: Run MA in background (non-blocking for user)
         memo_result, ma_usage = await agent_runner.run_memo(
@@ -360,6 +386,9 @@ async def process_turn_stream(
         storage.save_dynamic_report(session_id, memo_result.updated_report)
         storage.save_memo_digest(session_id, memo_result.digest)
 
+    except TurnCancelled:
+        logger.info(f"Turn cancelled for session {session_id}, discarding turn {current_turn_index}")
+        raise  # propagate to caller — no turn saved
     except Exception as e:
         logger.error(f"Error in streaming turn: {e}", exc_info=True)
         yield {"type": "error", "message": str(e)}

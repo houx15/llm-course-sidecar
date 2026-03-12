@@ -566,6 +566,8 @@ default_orchestrator = _build_orchestrator(
 session_orchestrators: dict[str, Orchestrator] = {}
 # Maps session_id → sync config passed at create time
 session_sync_config: Dict[str, Dict[str, str]] = {}
+# Per-session cancellation events — set when user interrupts a turn
+session_cancel_events: Dict[str, asyncio.Event] = {}
 user_code_runner = UserCodeRunner(sessions_root=sessions_root)
 code_execution_manager = CodeExecutionManager(runner=user_code_runner)
 notebook_manager = NotebookManager()
@@ -1221,10 +1223,19 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
     Returns Server-Sent Events stream with:
     - Companion response (character by character)
     - Progress updates from other agents
+
+    The stream can be cancelled via POST /api/session/{session_id}/message/cancel.
+    When cancelled, the current turn is NOT saved to history.
     """
+    # Create a fresh cancel event for this turn
+    cancel_event = asyncio.Event()
+    session_cancel_events[session_id] = cancel_event
 
     async def event_generator():
+        from .services.streaming import TurnCancelled
+
         orchestrator = _get_orchestrator(session_id)
+        cancelled = False
         try:
             # Validate session
             if not orchestrator.storage.session_exists(session_id):
@@ -1245,14 +1256,21 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
 
             yield f"data: {json.dumps({'type': 'start'}, ensure_ascii=False)}\n\n"
 
-            # Process turn with streaming
-            async for event in orchestrator.process_turn_stream(
-                session_id, request.message
-            ):
-                import json
+            # Process turn with streaming — pass cancel_event so it can bail out
+            try:
+                async for event in orchestrator.process_turn_stream(
+                    session_id, request.message, cancel_event=cancel_event
+                ):
+                    import json
 
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                await asyncio.sleep(0.01)  # Small delay for smooth streaming
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.01)  # Small delay for smooth streaming
+            except TurnCancelled:
+                cancelled = True
+                logger.info(f"Turn cancelled for session {session_id}")
+                import json
+                yield f"data: {json.dumps({'type': 'cancelled'}, ensure_ascii=False)}\n\n"
+                return
 
             # Post-turn sync — best-effort fire-and-forget
             try:
@@ -1317,6 +1335,10 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
             import json
 
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+        finally:
+            # Clean up cancel event
+            if session_cancel_events.get(session_id) is cancel_event:
+                session_cancel_events.pop(session_id, None)
 
     return StreamingResponse(
         event_generator(),
@@ -1326,6 +1348,31 @@ async def send_message_stream(session_id: str, request: SendMessageRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class CancelMessageResponse(BaseModel):
+    """Response for message cancellation."""
+    cancelled: bool
+    session_id: str
+
+
+@app.post("/api/session/{session_id}/message/cancel", response_model=CancelMessageResponse)
+async def cancel_message_stream(session_id: str):
+    """
+    Cancel the currently streaming message for a session.
+
+    Sets a cancellation flag that the streaming generator checks.
+    The current turn will NOT be saved to history — the session state
+    rolls back to before the turn started.
+    """
+    event = session_cancel_events.get(session_id)
+    if event:
+        event.set()
+        logger.info(f"Cancel requested for session {session_id}")
+        return CancelMessageResponse(cancelled=True, session_id=session_id)
+    # No active stream — still return success (idempotent)
+    logger.info(f"Cancel requested for session {session_id} but no active stream")
+    return CancelMessageResponse(cancelled=True, session_id=session_id)
 
 
 @app.get(
@@ -2086,6 +2133,12 @@ async def get_sidecar_contract():
             path="/api/session/{session_id}/message/stream",
             stability="stable",
             source="demo_parity",
+        ),
+        ContractRoute(
+            method="POST",
+            path="/api/session/{session_id}/message/cancel",
+            stability="stable",
+            source="new",
         ),
         ContractRoute(
             method="GET",
