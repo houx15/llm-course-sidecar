@@ -1,7 +1,7 @@
 """Pydantic models for data validation and type safety."""
 
 from typing import Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import re
 from datetime import datetime
 
@@ -83,8 +83,24 @@ class InstructionPacket(BaseModel):
 
 class SubtaskEvidence(BaseModel):
     """Evidence for a specific subtask."""
-    subtask_id: str
-    evidence: str
+    subtask_id: str = ""
+    evidence: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_field_names(cls, data):
+        """Accept common LLM field-name variants."""
+        if isinstance(data, str):
+            # LLM sometimes returns a plain string instead of an object
+            return {"subtask_id": "", "evidence": data}
+        if isinstance(data, dict):
+            # Accept 'subtask' as alias for 'subtask_id'
+            if "subtask" in data and "subtask_id" not in data:
+                data["subtask_id"] = data.pop("subtask")
+            # Accept 'description' as alias for 'evidence'
+            if "description" in data and "evidence" not in data:
+                data["evidence"] = data.pop("description")
+        return data
 
 
 class TurnOutcome(BaseModel):
@@ -100,6 +116,15 @@ class TurnOutcome(BaseModel):
     # v3.2.0: Expert consultation signal from CA
     expert_consultation_needed: bool = False
     expert_consultation_reason: str = ""  # e.g., "user_requested_data_analysis", "concept_clarification_needed", "error_diagnosis_needed"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_nulls(cls, data):
+        """Coerce null strings to empty string for fields that don't accept None."""
+        if isinstance(data, dict):
+            if data.get("expert_consultation_reason") is None:
+                data["expert_consultation_reason"] = ""
+        return data
 
 
 class MemoDigest(BaseModel):
