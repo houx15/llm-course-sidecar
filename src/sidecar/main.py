@@ -1502,7 +1502,7 @@ async def skip_task(session_id: str, request: SkipTaskRequest):
         if request.reason == "其他" and not (request.reason_text or "").strip():
             raise HTTPException(
                 status_code=422,
-                detail='选择"其他"时必须填写原因说明（reason_text）',
+                detail="选择\"其他\"时必须填写原因说明（reason_text）",
             )
 
         result = await orchestrator.execute_skip(
