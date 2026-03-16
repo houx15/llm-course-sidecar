@@ -312,10 +312,10 @@ def _ensure_overlay_templates(curriculum_root: Path) -> None:
     if _exists(_builtin):
         fallback_templates.append(_builtin)
 
+    target = curriculum_root / "templates"
+    if target.exists():
+        return
     for source in fallback_templates:
-        target = curriculum_root / source.name
-        if target.exists():
-            return
         shutil.copytree(source, target, dirs_exist_ok=True)
         return
 
