@@ -621,113 +621,117 @@ class Orchestrator:
         """
         from datetime import datetime, timezone
 
-        state = self.storage.load_state(session_id)
+        async with self._get_session_lock(session_id):
+            state = self.storage.load_state(session_id)
 
-        # Resolve target task
-        target_id = subtask_id or state.current_subtask_id
+            # Resolve target task
+            target_id = subtask_id or state.current_subtask_id
 
-        if not target_id:
-            # Find first active (not completed, not skipped) task
-            for tid, tstatus in state.subtask_status.items():
-                if tstatus.status not in ("completed", "skipped"):
-                    target_id = tid
-                    break
+            if not target_id:
+                # Find first active (not completed, not skipped) task
+                for tid, tstatus in state.subtask_status.items():
+                    if tstatus.status not in ("completed", "skipped"):
+                        target_id = tid
+                        break
 
-        if not target_id:
-            return {
-                "skipped_task_id": None,
-                "next_task_id": None,
-                "needs_reason": False,
-                "consecutive_skips": state.consecutive_skips,
-                "all_tasks_done": True,
-                "subtask_status": {k: v.model_dump() for k, v in state.subtask_status.items()},
-            }
+            if not target_id:
+                return {
+                    "skipped_task_id": None,
+                    "next_task_id": None,
+                    "needs_reason": False,
+                    "consecutive_skips": state.consecutive_skips,
+                    "all_tasks_done": True,
+                    "subtask_status": {k: v.model_dump() for k, v in state.subtask_status.items()},
+                }
 
-        # Validate task exists
-        if target_id not in state.subtask_status:
-            raise OrchestratorError(f"Task not found: {target_id}")
+            # Validate task exists
+            if target_id not in state.subtask_status:
+                raise OrchestratorError(f"Task not found: {target_id}")
 
-        # Validate task is not already completed/skipped
-        current_status = state.subtask_status[target_id].status
-        if current_status in ("completed", "skipped"):
-            raise OrchestratorError(
-                f"Task '{target_id}' is already {current_status} and cannot be skipped"
+            # Validate task is not already completed/skipped
+            current_status = state.subtask_status[target_id].status
+            if current_status in ("completed", "skipped"):
+                raise OrchestratorError(
+                    f"Task '{target_id}' is already {current_status} and cannot be skipped"
+                )
+
+            # If no reason and consecutive_skips >= 2, request reason before proceeding
+            if reason is None and state.consecutive_skips >= 2:
+                state.awaiting_skip_reason = True
+                self.storage.save_state(session_id, state)
+                return {
+                    "skipped_task_id": target_id,
+                    "next_task_id": None,
+                    "needs_reason": True,
+                    "consecutive_skips": state.consecutive_skips,
+                    "all_tasks_done": False,
+                    "subtask_status": {k: v.model_dump() for k, v in state.subtask_status.items()},
+                }
+
+            # Execute the skip
+            state.subtask_status[target_id].status = "skipped"
+            state.awaiting_skip_reason = False
+
+            # Record in skip_log
+            skip_entry = SkipLogEntry(
+                subtask_id=target_id,
+                turn_index=state.turn_index,
+                reason=reason,
+                reason_text=reason_text,
+                skipped_at=datetime.now(timezone.utc).isoformat(),
+            )
+            state.skip_log.append(skip_entry)
+
+            # Update consecutive_skips
+            if reason is not None:
+                state.consecutive_skips = 0
+            else:
+                state.consecutive_skips += 1
+
+            # Find next active task
+            task_ids = list(state.subtask_status.keys())
+            next_task_id: Optional[str] = None
+            try:
+                current_index = task_ids.index(target_id)
+                for i in range(current_index + 1, len(task_ids)):
+                    candidate = task_ids[i]
+                    if state.subtask_status[candidate].status not in ("completed", "skipped"):
+                        next_task_id = candidate
+                        break
+            except ValueError:
+                pass
+
+            # If no next task found, look from the beginning (wrap around to any remaining active)
+            if next_task_id is None:
+                for tid in task_ids:
+                    if state.subtask_status[tid].status not in ("completed", "skipped"):
+                        next_task_id = tid
+                        break
+
+            # Update current_subtask_id
+            state.current_subtask_id = next_task_id
+
+            # Check if all tasks done
+            all_tasks_done = all(
+                s.status in ("completed", "skipped")
+                for s in state.subtask_status.values()
             )
 
-        # If no reason and consecutive_skips >= 2, request reason before proceeding
-        if reason is None and state.consecutive_skips >= 2:
-            state.awaiting_skip_reason = True
             self.storage.save_state(session_id, state)
+
+            logger.info(
+                f"Task skipped: {target_id} (reason={reason}), next={next_task_id}, "
+                f"consecutive_skips={state.consecutive_skips}"
+            )
+
             return {
                 "skipped_task_id": target_id,
-                "next_task_id": None,
-                "needs_reason": True,
+                "next_task_id": next_task_id,
+                "needs_reason": False,
                 "consecutive_skips": state.consecutive_skips,
-                "all_tasks_done": False,
+                "all_tasks_done": all_tasks_done,
                 "subtask_status": {k: v.model_dump() for k, v in state.subtask_status.items()},
             }
-
-        # Execute the skip
-        state.subtask_status[target_id].status = "skipped"
-        state.awaiting_skip_reason = False
-
-        # Record in skip_log
-        skip_entry = SkipLogEntry(
-            subtask_id=target_id,
-            turn_index=state.turn_index,
-            reason=reason,
-            reason_text=reason_text,
-            skipped_at=datetime.now(timezone.utc).isoformat(),
-        )
-        state.skip_log.append(skip_entry)
-
-        # Update consecutive_skips
-        state.consecutive_skips += 1
-
-        # Find next active task
-        task_ids = list(state.subtask_status.keys())
-        next_task_id: Optional[str] = None
-        try:
-            current_index = task_ids.index(target_id)
-            for i in range(current_index + 1, len(task_ids)):
-                candidate = task_ids[i]
-                if state.subtask_status[candidate].status not in ("completed", "skipped"):
-                    next_task_id = candidate
-                    break
-        except ValueError:
-            pass
-
-        # If no next task found, look from the beginning (wrap around to any remaining active)
-        if next_task_id is None:
-            for tid in task_ids:
-                if state.subtask_status[tid].status not in ("completed", "skipped"):
-                    next_task_id = tid
-                    break
-
-        # Update current_subtask_id
-        state.current_subtask_id = next_task_id
-
-        # Check if all tasks done
-        all_tasks_done = all(
-            s.status in ("completed", "skipped")
-            for s in state.subtask_status.values()
-        )
-
-        self.storage.save_state(session_id, state)
-
-        logger.info(
-            f"Task skipped: {target_id} (reason={reason}), next={next_task_id}, "
-            f"consecutive_skips={state.consecutive_skips}"
-        )
-
-        return {
-            "skipped_task_id": target_id,
-            "next_task_id": next_task_id,
-            "needs_reason": False,
-            "consecutive_skips": state.consecutive_skips,
-            "all_tasks_done": all_tasks_done,
-            "subtask_status": {k: v.model_dump() for k, v in state.subtask_status.items()},
-        }
 
     def _should_unlock_instruction_packet(
         self,

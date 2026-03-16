@@ -1483,7 +1483,7 @@ async def skip_task(session_id: str, request: SkipTaskRequest):
     """
     Skip the current (or specified) task.
 
-    The student may optionally provide a reason. After 2 consecutive skips,
+    The student may optionally provide a reason. After 3 consecutive skips,
     a reason is required before the skip is executed.
     """
     try:
