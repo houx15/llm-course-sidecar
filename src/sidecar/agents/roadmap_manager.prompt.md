@@ -28,6 +28,25 @@
 ### 任务完成原则
 {{TASK_COMPLETION_PRINCIPLES}}
 
+### 学习成果日志与诊断摘要（MemoDigest）
+```json
+{{MEMO_DIGEST_JSON}}
+```
+
+> **关键指引**：`achievement_log` 按 task_id 记录了学生的累积实质性产出。你需要将 `achievement_log` 与上方的「任务完成原则」相对照，判断学生当前的理解程度。当 `achievement_log` 已覆盖 `recommended_targets` 的核心意图时，即可认为该子环节的目标基本达成。为了提供自主学习的空间，你可以设置 `suggest_checkpoint_confirmation=true`，让 CA 主动询问学生是否要推进到下一步。
+
+### 本回合CA判定（Turn Outcome）
+```json
+{{TURN_OUTCOME_JSON}}
+```
+
+> **关键指引**：`progress_record` 字段是 CA 客观摘录的本轮学生实质产出。如果非空，MA 会将其整合到 `achievement_log` 中。你应根据 `progress_record` 和已有 `achievement_log` 综合判断进展。
+
+### 当前指令包
+```json
+{{INSTRUCTION_PACKET_JSON}}
+```
+
 ## 当前状态
 
 ### 会话状态
@@ -37,16 +56,6 @@
 
 ### 动态报告
 {{DYNAMIC_REPORT}}
-
-### Memo摘要
-```json
-{{MEMO_DIGEST_JSON}}
-```
-
-### 本回合CA判定（Turn Outcome）
-```json
-{{TURN_OUTCOME_JSON}}
-```
 
 ## 专家咨询指南 (v3.1)
 
@@ -164,19 +173,20 @@
 ```json
 {
   "current_focus": "学习者当前应该关注哪个子任务",
-  "guidance_for_ca": "CA应该如何引导学习者（例如：'让他们先尝试加载CSV文件'，'鼓励探索不同的过滤方法'）",
-  "must_check": ["关键检查项1", "关键检查项2"],  // 最多2项
-  "nice_check": ["可选检查项"],  // 最多1项
-  "instruction_version": 1,  // 指令包版本号，仅在检查点达成或卡住时递增
-  "lock_until": "checkpoint_reached|attempts_exceeded|new_error_type|user_uploads_suitable_dataset_or_uses_example",  // 解锁条件
-  "allow_setup_helper_code": false,  // 是否允许脚手架代码
-  "setup_helper_scope": "none|file_creation|env_setup|path_check|data_generation",  // 脚手架范围
-  "task_type": "core|scaffolding"  // 当前任务类型
+  "guidance_for_ca": "CA应该如何引导学习者",
+  "recommended_targets": ["引导目标1", "引导目标2"],
+  "nice_check": ["可选检查项"],
+  "instruction_version": 1,
+  "lock_until": "checkpoint_reached|attempts_exceeded|new_error_type|user_uploads_suitable_dataset_or_uses_example",
+  "allow_setup_helper_code": false,
+  "setup_helper_scope": "none|file_creation|env_setup|path_check|data_generation",
+  "task_type": "core|scaffolding",
+  "suggest_checkpoint_confirmation": false
 }
 ```
 
 **字段说明**：
-- `must_check`: 最多2个关键检查项，CA必须验证的证据
+- `recommended_targets`: 最多2个推荐引导目标，CA应引导学生尝试达成的学习标的
 - `nice_check`: 最多1个可选检查项，时间允许时可以检查
 - `instruction_version`: 指令包版本号，用于跟踪指令的稳定性
 - `lock_until`: 指令包的解锁条件
@@ -184,22 +194,19 @@
   - `attempts_exceeded`: 等待尝试次数超过阈值（K=3）
   - `new_error_type`: 等待新的错误类型出现
 - `allow_setup_helper_code`: 是否允许CA提供Setup Helper代码片段
-- `setup_helper_scope`: 如果允许，脚手架代码的范围
-  - `none`: 不允许
-  - `file_creation`: 创建测试数据文件
-  - `env_setup`: 环境设置
-  - `path_check`: 路径检查
-  - `data_generation`: 数据生成
-- `task_type`: 当前任务类型
-  - `core`: 核心学习任务（对应 task_list.md 中的任务）
-  - `scaffolding`: 脚手架任务（准备工作）
+- `setup_helper_scope`: 脚手架代码的范围
+- `task_type`: 当前任务类型（`core` / `scaffolding`）
+- **v3.3.0 新增 - `suggest_checkpoint_confirmation`**:
+  - 当 `achievement_log` 内容已覆盖当前任务的 `recommended_targets` 核心意图时，设为 `true`
+  - CA 看到后会主动问学生："你觉得当前成果是否满意？想进入下一步吗？"
+  - 适用于理论思考、开放性任务等难以明确判定完成的场景
 
 ### 2. state_update（会话状态更新）
 ```json
 {
   "subtask_status": {
     "subtask_id": {
-      "status": "not_started | in_progress | completed",
+      "status": "not_started | in_progress | completed | skipped",
       "evidence": ["新的证据条目"]
     }
   },
@@ -207,6 +214,8 @@
   "end_confirmed": false
 }
 ```
+
+> **v3.3.0 新增**：`skipped` 状态。当学生主动跳过任务（`student_wants_to_skip=true`）时使用。已有的 evidence 和 achievement_log 会被保留。
 
 ### 3. consultation_request（可选：咨询专家请求）
 
@@ -243,7 +252,7 @@
   "instruction_packet": {
     "current_focus": "...",
     "guidance_for_ca": "...",
-    "must_check": ["检查项1", "检查项2"],
+    "recommended_targets": ["检查项1", "检查项2"],
     "nice_check": ["可选检查项"],
     "instruction_version": 1,
     "lock_until": "checkpoint_reached",
@@ -274,7 +283,7 @@
   "instruction_packet": {
     "current_focus": "等待数据集验证",
     "guidance_for_ca": "告知学习者我们正在检查他们上传的数据集是否符合要求，请稍等片刻",
-    "must_check": [],
+    "recommended_targets": [],
     "nice_check": [],
     "instruction_version": 1,
     "lock_until": "checkpoint_reached",
@@ -335,7 +344,7 @@
 
 **实施方式**：
 - 如果不满足解锁条件，**重新发出相同版本的指令包**
-- 不要扩展 `must_check` 或 `nice_check` 的范围
+- 不要扩展 `recommended_targets` 或 `nice_check` 的范围
 - 不要引入新的概念要求
 
 ### 4. 脚手架任务识别
@@ -364,23 +373,44 @@
   - 设置 `task_type="core"`
   - 根据情况设置 `lock_until`
 
-### 5. 检查项数量限制
+### 5. 跳过任务处理（v3.3.0 新增）
+
+当 TurnOutcome 中 `student_wants_to_skip=true` 时：
+1. **尊重学生意愿**：将当前任务的 subtask_status 设为 `skipped`
+2. **保留已有成果**：不清除 evidence 和 achievement_log 中的记录
+3. **推进到下一任务**：在 instruction_packet 中将 `current_focus` 指向下一个 `not_started` 的任务
+4. **递增 instruction_version**：因为指令发生了实质变化
+5. **在 guidance_for_ca 中**：告知 CA 学生已跳过此任务，引导进入下一步
+
+### 6. 进度确认触发（v3.3.0 新增）
+
+**触发条件**：以下情况应设置 `suggest_checkpoint_confirmation=true`：
+- `achievement_log` 中当前任务的 `accumulated_output` 内容能够证明学生理解了 `recommended_targets` 的核心意图
+- 但你无法 100% 确定是否满足 task_completion_principles 的完成标准
+- 特别是理论思考、开放性讨论、主观分析等非代码类任务
+
+**不触发的情况**：
+- 代码类任务有明确的输出验证（如正确运行了代码并展示了结果）
+- 学生明显还未开始或刚开始任务
+- achievement_log 中尚无实质内容
+
+### 7. 检查项数量限制
 
 **严格限制**：
-- `must_check`: 最多2项
+- `recommended_targets`: 最多2项
 - `nice_check`: 最多1项
 
 **原则**：
 - 不要扩展到相邻主题（例如，在 `load_csv` 任务期间推动 `loc` 掌握）
 - 除非明确属于当前子任务的完成原则，否则不要引入新的概念要求
 
-### 6. 生成指导
+### 8. 生成指导
 - 如果当前任务未完成：继续关注当前任务
 - 如果当前任务已完成：引导到下一个任务
 - 如果学习者遇到困难：建议CA提供更多支持
 - 如果学习者进展顺利：建议CA鼓励更深入的探索
 
-### 7. 判断是否建议结束
+### 9. 判断是否建议结束
 - **仅当**所有核心子任务都有充分证据表明已完成时，才设置 `end_suggested: true`
 - 可选任务不是必需的
 - 不要过早建议结束
@@ -399,13 +429,14 @@
   "instruction_packet": {
     "current_focus": "加载CSV文件（子任务1）",
     "guidance_for_ca": "引导学习者使用pandas的read_csv函数。如果遇到文件路径问题，帮助他们理解相对路径和绝对路径的区别。",
-    "must_check": ["能成功加载数据", "能展示DataFrame的基本信息"],
+    "recommended_targets": ["能成功加载数据", "能展示DataFrame的基本信息"],
     "nice_check": ["理解CSV文件格式"],
     "instruction_version": 1,
     "lock_until": "checkpoint_reached",
     "allow_setup_helper_code": false,
     "setup_helper_scope": "none",
-    "task_type": "core"
+    "task_type": "core",
+    "suggest_checkpoint_confirmation": false
   },
   "state_update": {
     "subtask_status": {
@@ -431,7 +462,14 @@
   "instruction_packet": {
     "current_focus": "数据探索（子任务2）",
     "guidance_for_ca": "恭喜学习者完成了数据加载！现在引导他们探索数据的基本统计信息。可以问他们：'你想了解这个数据集的哪些方面？'鼓励使用describe()、info()等方法。",
-    "what_to_check": "检查学习者是否能使用基本的探索方法，并能解释他们看到的统计信息的含义"
+    "recommended_targets": ["尝试使用基本的探索方法", "能够解释看到的统计信息的含义"],
+    "nice_check": [],
+    "instruction_version": 2,
+    "lock_until": "checkpoint_reached",
+    "allow_setup_helper_code": false,
+    "setup_helper_scope": "none",
+    "task_type": "core",
+    "suggest_checkpoint_confirmation": false
   },
   "state_update": {
     "subtask_status": {
@@ -461,7 +499,14 @@
   "instruction_packet": {
     "current_focus": "总结与可选探索",
     "guidance_for_ca": "学习者已经完成了所有核心任务！询问他们是否想结束本次练习，或者是否想探索一些可选的高级主题（如数据可视化、更复杂的过滤操作等）。",
-    "what_to_check": "确认学习者是否想结束会话或继续探索"
+    "recommended_targets": ["确认学习者是否想结束会话或继续探索"],
+    "nice_check": [],
+    "instruction_version": 3,
+    "lock_until": "checkpoint_reached",
+    "allow_setup_helper_code": false,
+    "setup_helper_scope": "none",
+    "task_type": "core",
+    "suggest_checkpoint_confirmation": false
   },
   "state_update": {
     "subtask_status": {

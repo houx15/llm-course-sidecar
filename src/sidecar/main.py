@@ -70,7 +70,7 @@ default_experts_dir = Path(
     os.getenv("EXPERTS_DIR", str(project_root / "experts"))
 ).resolve()
 default_main_agents_dir = Path(
-    os.getenv("MAIN_AGENTS_DIR", str(project_root / "content" / "agents"))
+    os.getenv("MAIN_AGENTS_DIR", str(project_root / "src" / "sidecar" / "agents"))
 ).resolve()
 
 overlay_root = sessions_root / "_chapter_overlays"
@@ -170,11 +170,16 @@ def _exists(path: Optional[Path]) -> bool:
 def _build_orchestrator(
     curriculum_dir: Path, experts_dir: Path, main_agents_dir: Optional[Path]
 ) -> Orchestrator:
+    from .services.agent_runner import AgentRunner
+    # Resolve agent runner with the appropriate agents_dir
+    agent_runner = AgentRunner(
+        agents_dir=str(main_agents_dir) if main_agents_dir else str(default_main_agents_dir)
+    )
     return Orchestrator(
         storage=Storage(base_dir=str(sessions_root)),
+        agent_runner=agent_runner,
         curriculum_dir=str(curriculum_dir),
         experts_dir=str(experts_dir),
-        main_agents_dir=str(main_agents_dir) if main_agents_dir else None,
     )
 
 
@@ -938,6 +943,23 @@ class ResetNotebookResponse(BaseModel):
     success: bool
 
 
+class SkipTaskRequest(BaseModel):
+    """Request to skip current task after user confirmation (v3.4.0)."""
+
+    current_task_id: str
+    next_task_id: str
+
+
+class SkipTaskResponse(BaseModel):
+    """Response after task skip execution."""
+
+    success: bool
+    skipped_task_id: str
+    next_task_id: str
+    new_focus: str
+    message: str
+
+
 async def _sync_turn_to_backend(
     session_id: str,
     chapter_id: str,
@@ -1373,6 +1395,40 @@ async def cancel_message_stream(session_id: str):
     # No active stream — still return success (idempotent)
     logger.info(f"Cancel requested for session {session_id} but no active stream")
     return CancelMessageResponse(cancelled=True, session_id=session_id)
+
+
+@app.post("/api/session/{session_id}/skip_task", response_model=SkipTaskResponse)
+async def skip_task(session_id: str, request: SkipTaskRequest):
+    """
+    Skip current task after user confirmation (v3.4.0).
+
+    Called when the user confirms the skip task dialog in the frontend.
+    Marks the current task as 'skipped' and instructs RMA to prepare the next task.
+    """
+    try:
+        orchestrator = _get_orchestrator(session_id)
+        if not orchestrator.storage.session_exists(session_id):
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        logger.info(
+            f"Skip task confirmed: session={session_id}, "
+            f"current={request.current_task_id}, next={request.next_task_id}"
+        )
+
+        result = await orchestrator.execute_skip_task(
+            session_id, request.current_task_id, request.next_task_id
+        )
+
+        return SkipTaskResponse(**result)
+
+    except OrchestratorError as e:
+        logger.error(f"Failed to skip task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in skip task: {e}")
+        raise HTTPException(status_code=500, detail="跳过任务失败")
 
 
 @app.get(

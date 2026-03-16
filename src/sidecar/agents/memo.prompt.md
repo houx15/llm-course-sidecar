@@ -65,7 +65,14 @@
     "student_sentiment": "engaged|confused|frustrated|fatigued",
     "blocker_type": "none|scaffolding|core_concept|core_implementation|external_resource_needed",
     "progress_delta": "none|evidence_added|checkpoint_reached|regressed",
-    "diagnostic_log": ["内部诊断信息1", "内部诊断信息2"]
+    "diagnostic_log": ["内部诊断信息1", "内部诊断信息2"],
+    "achievement_log": {
+      "task_id_1": {
+        "task_id": "task_id_1",
+        "accumulated_output": "该任务下学生的所有实质性产出的累积记录",
+        "last_updated_turn": 5
+      }
+    }
   },
   "error_entries": [
     {
@@ -95,6 +102,14 @@
   - `evidence_added`: 添加了新证据
   - `checkpoint_reached`: 达到检查点
   - `regressed`: 退步（理解出现倒退）
+- **v3.3.0 新增 - `achievement_log`（学习成果日志）**：
+  - **按 task_id 分段**记录学生在每个任务下的累积实质性产出
+  - **数据来源**：从 TurnOutcome 的 `progress_record` 字段提取本轮新增产出
+  - **整合规则**：将本轮 `progress_record` 提炼后，与已有的 `accumulated_output` 进行**合并与去重**。保持内容高度结构化和精简，保留所有关键认知证据，避免冗长的对话流水账。
+  - **不要覆盖但要精简**：保留历史关键信息，但在多次迭代中如有纠正，应以最新版本为主。
+  - **task_id 判断**：根据当前 session_state 中正在进行的子任务确定 task_id
+  - 如果上一轮已有 achievement_log，继承并更新；首次生成时为空字典 `{}`
+  - **v3.4.0 新增**：当任务被跳过（`student_wants_to_skip=true`）时，保留该 task_id 已有的 achievement_log 不变，在 key_observations 中记录跳过事件
 - `diagnostic_log`: 内部诊断信息（不显示给学生，不默认提供给CA）
 
 ## 动态报告更新指南
@@ -149,6 +164,7 @@
 - "当前进行"和"未来任务"都是task_list.md中定义的主任务条目
 - "我的进展"是当前主任务的细化，反映学习者的实时进展
 - 已完成的任务不需要在任务状态中显示（可以在"最近活动"中提及）
+- **v3.4.0 新增**：当 `subtask_status` 中有 `"skipped"` 状态的任务时，需在任务状态区新增 "⏭️ 已跳过" 部分，列出学生主动跳过的任务及跳过时的进展摘要
 
 ### 示例动态报告格式
 
@@ -187,6 +203,18 @@
 
 ## 下一步建议
 引导学习者理解explode()的输出结构，然后使用json_normalize()提取date和tags字段。
+
+## 已跳过的任务
+（无）
+```
+
+**v3.4.0 示例（含跳过任务）**：
+
+当 SESSION_STATE_JSON 中有 `"status": "skipped"` 的子任务时，动态报告应包含：
+
+```markdown
+## 已跳过的任务
+- ⏭️ AI研究范式转变地图（ai_research_paradigm_shift_map）— 学生已完成部分风险识别，主动跳过
 ```
 
 ## 学生错误总结指南
@@ -343,7 +371,14 @@
     "student_sentiment": "engaged",
     "blocker_type": "none",
     "progress_delta": "evidence_added",
-    "diagnostic_log": []
+    "diagnostic_log": [],
+    "achievement_log": {
+      "explode_consequences": {
+        "task_id": "explode_consequences",
+        "accumulated_output": "学习者成功使用explode()展开consequences列，正在理解展开后的DataFrame结构",
+        "last_updated_turn": 5
+      }
+    }
   },
   "error_entries": []
 }
@@ -363,7 +398,18 @@
     ],
     "student_strengths": [
       "能够阅读错误信息并尝试调试"
-    ]
+    ],
+    "student_sentiment": "confused",
+    "blocker_type": "core_concept",
+    "progress_delta": "regressed",
+    "diagnostic_log": ["学生对 loc 的行列参数传参机制存在根本性误解"],
+    "achievement_log": {
+      "explore_data": {
+        "task_id": "explore_data",
+        "accumulated_output": "之前成功使用了describe()和info()。但在使用loc切片时出现参数颠倒的错误持续卡壳。",
+        "last_updated_turn": 8
+      }
+    }
   },
   "error_entries": [
     {
@@ -383,3 +429,4 @@
 3. **有效JSON**：确保输出是严格有效的JSON格式
 4. **客观性**：基于观察记录，不要做过度推测
 5. **教学价值**：记录的错误应该有教学价值，不是所有错误都需要记录
+6. **v3.4.0 - 跳过任务处理**：当 SESSION_STATE_JSON 中 subtask_status 包含 `"skipped"` 状态时，应在动态报告中如实反映跳过信息，并在 achievement_log 中保留已有产出记录

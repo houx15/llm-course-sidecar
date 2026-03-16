@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 import yaml
 from datetime import datetime
 from pathlib import Path
@@ -54,12 +53,11 @@ class ConsultationEngine:
         """
         self.experts_root = experts_root
         self.curriculum_root = curriculum_root
-        self.sessions_root = Path(os.getenv("SESSIONS_DIR", "sessions"))
         self.expert_runner = ExpertRunner(experts_root)
 
-        # Load yellow page with runtime-aware path resolution.
-        yellow_page_path = self._resolve_yellow_page_path()
-        self.yellow_page = load_yellow_page(yellow_page_path) if yellow_page_path else None
+        # Load yellow page (v3.0.1: from .metadata/experts/)
+        yellow_page_path = Path(".metadata/experts/yellow_page.generated.json")
+        self.yellow_page = load_yellow_page(yellow_page_path)
         if not self.yellow_page:
             raise ConsultationEngineError("Failed to load yellow page")
 
@@ -70,7 +68,7 @@ class ConsultationEngine:
         """Get next consultation ID for a session."""
         if session_id not in self._consultation_counters:
             # Check existing consultations in session
-            session_dir = self.sessions_root / session_id / "expert_workspace" / "consultations"
+            session_dir = Path("sessions") / session_id / "expert_workspace" / "consultations"
             if session_dir.exists():
                 existing = list(session_dir.glob("consult_*"))
                 self._consultation_counters[session_id] = len(existing)
@@ -79,49 +77,6 @@ class ConsultationEngine:
 
         self._consultation_counters[session_id] += 1
         return f"consult_{self._consultation_counters[session_id]:04d}"
-
-    def _resolve_yellow_page_path(self) -> Optional[Path]:
-        """Resolve yellow page path with env/bundle-friendly fallbacks."""
-        env_path = os.getenv("EXPERT_YELLOW_PAGE_PATH", "").strip()
-        candidates = []
-        if env_path:
-            candidates.append(Path(env_path))
-
-        candidates.extend(
-            [
-                self.experts_root / "yellow_page.generated.json",
-                self.experts_root / ".metadata" / "experts" / "yellow_page.generated.json",
-                self.experts_root.parent / "yellow_page.generated.json",
-                self.experts_root.parent / ".metadata" / "experts" / "yellow_page.generated.json",
-                Path(".metadata/experts/yellow_page.generated.json"),
-            ]
-        )
-        for candidate in candidates:
-            if candidate.exists():
-                return candidate
-        return None
-
-    def _resolve_chapter_dir(self, chapter_id: str) -> Path:
-        """
-        Resolve the filesystem path for a chapter.
-
-        Directory layout: curriculum_root/{course_id}/{chapter_id}/
-
-        Accepts:
-          - "course_id/chapter_name"  → curriculum_root/course_id/chapter_name
-          - "chapter_name"            → search all course subdirs for a match
-        """
-        if "/" in chapter_id:
-            course_id, chapter_name = chapter_id.split("/", 1)
-            return self.curriculum_root / course_id / chapter_name
-
-        for course_dir in sorted(self.curriculum_root.iterdir()):
-            if course_dir.is_dir():
-                candidate = course_dir / chapter_id
-                if candidate.exists():
-                    return candidate
-
-        return self.curriculum_root / chapter_id
 
     def _load_consultation_guide(self, chapter_id: str) -> Optional[ConsultationGuide]:
         """
@@ -134,7 +89,14 @@ class ConsultationEngine:
             ConsultationGuide if found, None otherwise
         """
         try:
-            guide_path = self._resolve_chapter_dir(chapter_id) / "consultation_guide.json"
+            # Support both new format (course_id/chapter_name) and legacy format
+            if "/" in chapter_id:
+                course_id, chapter_name = chapter_id.split("/", 1)
+                guide_path = (
+                    self.curriculum_root / "courses" / course_id / "chapters" / chapter_name / "consultation_guide.json"
+                )
+            else:
+                guide_path = self.curriculum_root / "chapters" / chapter_id / "consultation_guide.json"
 
             if not guide_path.exists():
                 logger.warning(f"Consultation guide not found for chapter: {chapter_id}")
@@ -160,7 +122,11 @@ class ConsultationEngine:
             ConsultationContext (v3.1) or ConsultationGuide (v3.0) if found, None otherwise
         """
         # Determine chapter directory
-        chapter_dir = self._resolve_chapter_dir(chapter_id)
+        if "/" in chapter_id:
+            course_id, chapter_name = chapter_id.split("/", 1)
+            chapter_dir = self.curriculum_root / "courses" / course_id / "chapters" / chapter_name
+        else:
+            chapter_dir = self.curriculum_root / "chapters" / chapter_id
 
         # Try v3.1 hybrid format first (YAML + Markdown)
         yaml_path = chapter_dir / "consultation_config.yaml"
@@ -351,7 +317,7 @@ class ConsultationEngine:
             raise ConsultationEngineError(f"Expert {expert_id} not found in yellow page")
 
         # Create consultation workspace
-        consult_dir = self.sessions_root / session_id / "expert_workspace" / "consultations" / consultation_id
+        consult_dir = Path("sessions") / session_id / "expert_workspace" / "consultations" / consultation_id
         consult_dir.mkdir(parents=True, exist_ok=True)
 
         # Create envelope
@@ -598,10 +564,15 @@ class ConsultationEngine:
                 guidance_text = enforcement[guidance_start:]
                 updates["guidance_for_ca"] = guidance_text
 
-        # Parse must_check (array)
-        must_check_match = re.search(r"must_check=\['([^']+)'\]", enforcement)
-        if must_check_match:
-            updates["must_check"] = [must_check_match.group(1)]
+        # Parse recommended_targets (array)
+        recommended_targets_match = re.search(r"recommended_targets=\['([^']+)'\]", enforcement)
+        if recommended_targets_match:
+            updates["recommended_targets"] = [recommended_targets_match.group(1)]
+        else:
+            # Fallback for old "recommended_targets" legacy strings in binding rules
+            must_check_match = re.search(r"must_check=\['([^']+)'\]", enforcement)
+            if must_check_match:
+                updates["recommended_targets"] = [must_check_match.group(1)]
 
         return updates
 
@@ -738,7 +709,7 @@ class ConsultationEngine:
             }
 
         # Create consultation workspace
-        consult_dir = self.sessions_root / session_id / "expert_workspace" / "consultations" / consultation_id
+        consult_dir = Path("sessions") / session_id / "expert_workspace" / "consultations" / consultation_id
         consult_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize transcript

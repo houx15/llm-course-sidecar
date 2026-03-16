@@ -1,5 +1,6 @@
 """Agent runner for executing agents with prompt injection and JSON validation."""
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -29,17 +30,14 @@ logger = logging.getLogger(__name__)
 class AgentRunner:
     """Runner for executing agents with prompt injection and validation."""
 
-    def __init__(self, agents_dir: Optional[str] = None):
+    def __init__(self, agents_dir: str = "app/server/agents"):
         """
         Initialize agent runner.
 
         Args:
             agents_dir: Directory containing agent prompt files
         """
-        if agents_dir:
-            self.agents_dir = Path(agents_dir)
-        else:
-            self.agents_dir = Path(__file__).resolve().parents[1] / "agents"
+        self.agents_dir = Path(agents_dir)
         self.llm_client = get_llm_client()
 
     def _load_prompt_template(self, agent_name: str) -> str:
@@ -83,40 +81,68 @@ class AgentRunner:
         self,
         prompt: str,
         model_class,
-        max_retries: int = 1,
-    ) -> Tuple:
+        max_retries: int = 2,
+    ):
         """
-        Call LLM with retry logic for JSON validation.
+        Call LLM with retry logic for HTTP errors (502/timeout) and JSON validation.
+
+        Handles two error types with exponential backoff:
+        - LLMError: HTTP 502, timeout, connection errors → retry with backoff
+        - JSONValidationError: Invalid/missing JSON → retry with error feedback
 
         Args:
             prompt: Full prompt to send to LLM
             model_class: Pydantic model class for validation
-            max_retries: Maximum number of retries
+            max_retries: Maximum number of retries (default: 2)
 
         Returns:
-            Tuple of (validated_model_instance, usage) where usage has input_tokens and output_tokens
+            Validated model instance
         """
         last_error = None
-        total_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+        last_error_type = None  # 'http' or 'json'
 
         for attempt in range(max_retries + 1):
             try:
-                # Add retry message if this is a retry
-                if attempt > 0:
-                    retry_prompt = f"{prompt}\n\n---\n\n上一次的JSON输出无效。错误: {last_error}\n\n请重新生成有效的JSON，确保：\n1. JSON格式正确\n2. 包含所有必需字段\n3. 字段类型正确"
-                    response, usage = await self.llm_client.generate(retry_prompt)
+                # Build prompt: add JSON error feedback on JSON validation retry
+                if attempt > 0 and last_error_type == "json":
+                    current_prompt = (
+                        f"{prompt}\n\n---\n\n"
+                        f"上一次的JSON输出无效。错误: {last_error}\n\n"
+                        f"请重新生成有效的JSON，确保：\n"
+                        f"1. JSON格式正确\n2. 包含所有必需字段\n3. 字段类型正确"
+                    )
                 else:
-                    response, usage = await self.llm_client.generate(prompt)
+                    current_prompt = prompt
 
-                total_usage["input_tokens"] += usage.get("input_tokens", 0)
-                total_usage["output_tokens"] += usage.get("output_tokens", 0)
+                response = await self.llm_client.generate(current_prompt)
 
                 # Parse and validate
-                return parse_and_validate(response, model_class), total_usage
+                return parse_and_validate(response, model_class)
+
+            except LLMError as e:
+                last_error = str(e)
+                last_error_type = "http"
+                backoff = min(2 ** (attempt + 1), 8)  # 2s, 4s, 8s
+                logger.warning(
+                    f"LLM HTTP error (attempt {attempt + 1}/{max_retries + 1}): "
+                    f"{last_error}. Retrying in {backoff}s..."
+                )
+
+                if attempt == max_retries:
+                    logger.error(f"All LLM retry attempts failed: {last_error}")
+                    raise JSONValidationError(
+                        f"LLM unavailable after {max_retries + 1} attempts: {last_error}"
+                    )
+
+                await asyncio.sleep(backoff)
 
             except JSONValidationError as e:
                 last_error = str(e)
-                logger.warning(f"JSON validation failed (attempt {attempt + 1}): {last_error}")
+                last_error_type = "json"
+                logger.warning(
+                    f"JSON validation failed (attempt {attempt + 1}/{max_retries + 1}): "
+                    f"{last_error}"
+                )
 
                 if attempt == max_retries:
                     logger.error(f"All retry attempts failed: {last_error}")
@@ -131,7 +157,7 @@ class AgentRunner:
         instruction_packet: InstructionPacket,
         session_state: SessionState,
         max_retries: int = 1,
-    ) -> Tuple[TurnOutcome, Dict[str, int]]:
+    ) -> TurnOutcome:
         """
         Recover TurnOutcome JSON when CA response lacks valid JSON.
 
@@ -142,6 +168,7 @@ class AgentRunner:
             "要求：只输出JSON，不要任何额外文本或解释。\n"
             "字段必须齐全，字符串字段使用简体中文。\n\n"
             "TurnOutcome字段：\n"
+            "- progress_record: 学生本轮的实质性产出摘录，如无则为空字符串\n"
             "- what_user_attempted\n"
             "- what_user_observed\n"
             "- ca_teaching_mode: socratic|direct\n"
@@ -149,7 +176,8 @@ class AgentRunner:
             "- checkpoint_reached: true/false\n"
             "- blocker_type: none|scaffolding|core_concept|core_implementation|external_resource_needed\n"
             "- student_sentiment: engaged|confused|frustrated|fatigued\n"
-            "- evidence_for_subtasks: 数组，可为空\n\n"
+            "- evidence_for_subtasks: 数组，可为空\n"
+            "- student_wants_to_skip: true/false\n\n"
             "会话状态：\n"
             f"{session_state.model_dump_json(indent=2)}\n\n"
             "指令包：\n"
@@ -160,8 +188,7 @@ class AgentRunner:
             f"{companion_response}\n"
         )
 
-        result, usage = await self._call_llm_with_retry(prompt, TurnOutcome, max_retries=max_retries)
-        return result, usage
+        return await self._call_llm_with_retry(prompt, TurnOutcome, max_retries=max_retries)
 
     async def run_companion(
         self,
@@ -174,19 +201,17 @@ class AgentRunner:
         task_completion_principles: str,
         interaction_protocol: str,
         socratic_vs_direct: str,
-        memory_long_term: str,
-        memory_mid_term: str,
         memory_recent_turns: str,
         available_experts_info: str = "",  # v3.2.0: Expert information
         uploaded_files_info: str = "",  # v3.2.0: Uploaded files information
-        recent_code_executions: str = "",  # v3.3.0: Recent code execution context
         expert_output_summary: Optional[str] = None,  # v3.2.0: Expert consultation results
-    ) -> Tuple[str, TurnOutcome, Dict[str, int]]:
+        memo_digest: Optional[MemoDigest] = None,  # v3.4.1: Access to achievement log
+    ) -> Tuple[str, TurnOutcome]:
         """
         Run Companion Agent.
 
         Returns:
-            Tuple of (companion_response, turn_outcome, usage)
+            Tuple of (companion_response, turn_outcome)
         """
         # Load template
         template = self._load_prompt_template("companion")
@@ -201,24 +226,33 @@ class AgentRunner:
             "SESSION_STATE_JSON": session_state.model_dump_json(indent=2),
             "INSTRUCTION_PACKET_JSON": instruction_packet.model_dump_json(indent=2),
             "DYNAMIC_REPORT": dynamic_report,
-            "MEMORY_LONG_TERM": memory_long_term,
-            "MEMORY_MID_TERM": memory_mid_term,
             "MEMORY_RECENT_TURNS": memory_recent_turns,
             "USER_MESSAGE": user_message,
             "AVAILABLE_EXPERTS_INFO": available_experts_info,  # v3.2.0
             "UPLOADED_FILES_INFO": uploaded_files_info,  # v3.2.0
-            "RECENT_CODE_EXECUTIONS": recent_code_executions,  # v3.3.0
             "EXPERT_OUTPUT_SUMMARY": expert_output_summary or "",  # v3.2.0
+            "MEMO_DIGEST_JSON": memo_digest.model_dump_json(indent=2) if memo_digest else "{}",  # v3.4.1
         }
         prompt = self._inject_context(template, context)
 
-        # Call LLM with retry
+        # Call LLM with HTTP retry (v3.4.0: retry on 502/timeout)
         try:
-            response, usage = await self.llm_client.generate(prompt)
-            total_usage: Dict[str, int] = {
-                "input_tokens": usage.get("input_tokens", 0),
-                "output_tokens": usage.get("output_tokens", 0),
-            }
+            max_http_retries = 2
+            response = None
+            for http_attempt in range(max_http_retries + 1):
+                try:
+                    response = await self.llm_client.generate(prompt)
+                    break  # Success
+                except LLMError as e:
+                    if http_attempt < max_http_retries:
+                        backoff = min(2 ** (http_attempt + 1), 8)
+                        logger.warning(
+                            f"CA LLM error (attempt {http_attempt + 1}/{max_http_retries + 1}): "
+                            f"{e}. Retrying in {backoff}s..."
+                        )
+                        await asyncio.sleep(backoff)
+                    else:
+                        raise  # Will be caught by outer except
 
             # Extract companion response (text before JSON block)
             companion_response = response
@@ -231,24 +265,26 @@ class AgentRunner:
             except JSONValidationError as e:
                 logger.warning(f"Failed to parse turn outcome: {e}")
                 try:
-                    turn_outcome, recover_usage = await self._recover_turn_outcome(
+                    turn_outcome = await self._recover_turn_outcome(
                         user_message=user_message,
                         companion_response=companion_response,
                         instruction_packet=instruction_packet,
                         session_state=session_state,
                         max_retries=1,
                     )
-                    total_usage["input_tokens"] += recover_usage.get("input_tokens", 0)
-                    total_usage["output_tokens"] += recover_usage.get("output_tokens", 0)
                 except (LLMError, JSONValidationError) as recover_error:
                     logger.error(f"Failed to recover turn outcome: {recover_error}")
                     turn_outcome = get_default_turn_outcome()
 
-            return companion_response, turn_outcome, total_usage
+            return companion_response, turn_outcome
 
         except (LLMError, JSONValidationError) as e:
             logger.error(f"Companion agent failed: {e}")
-            raise LLMError(str(e)) from e
+            # Return fallback response
+            return (
+                "抱歉，我遇到了一些技术问题。请再试一次，或者告诉我你想做什么，我会尽力帮助你。",
+                get_default_turn_outcome()
+            )
 
     async def run_memo(
         self,
@@ -260,12 +296,12 @@ class AgentRunner:
         dynamic_report_template: str,
         student_error_summary_template: str,
         final_learning_report_template: str,
-    ) -> Tuple[MemoResult, Dict[str, int]]:
+    ) -> MemoResult:
         """
         Run Memo Agent.
 
         Returns:
-            Tuple of (MemoResult, usage)
+            MemoResult with updated report, digest, and error entries
         """
         # Load template
         template = self._load_prompt_template("memo")
@@ -285,8 +321,8 @@ class AgentRunner:
 
         # Call LLM with retry
         try:
-            result, usage = await self._call_llm_with_retry(prompt, MemoResult, max_retries=1)
-            return result, usage
+            result = await self._call_llm_with_retry(prompt, MemoResult, max_retries=1)
+            return result
 
         except (LLMError, JSONValidationError) as e:
             logger.error(f"Memo agent failed: {e}")
@@ -295,7 +331,7 @@ class AgentRunner:
                 updated_report=current_report,
                 digest=get_default_memo_digest(),
                 error_entries=[]
-            ), {"input_tokens": 0, "output_tokens": 0}
+            )
 
     async def run_roadmap_manager(
         self,
@@ -309,7 +345,8 @@ class AgentRunner:
         available_experts: str = "",
         uploaded_files_info: dict = None,  # v3.2.0: Add uploaded files info
         turn_outcome: Optional[TurnOutcome] = None,
-    ) -> Tuple[RoadmapManagerResult, Dict[str, int]]:
+        instruction_packet: Optional[InstructionPacket] = None,  # v3.3.0: Current instruction packet for prompt
+    ) -> RoadmapManagerResult:
         """
         Run Roadmap Manager Agent.
 
@@ -320,7 +357,7 @@ class AgentRunner:
             turn_outcome: CA's current-turn judgment output (optional)
 
         Returns:
-            Tuple of (RoadmapManagerResult, usage)
+            RoadmapManagerResult with instruction packet and state update
         """
         # Load template
         template = self._load_prompt_template("roadmap_manager")
@@ -364,12 +401,15 @@ class AgentRunner:
             "CHAPTER_CONTEXT": chapter_context,
             "TASK_LIST": task_list,
             "TASK_COMPLETION_PRINCIPLES": task_completion_principles,
-            "SESSION_STATE_JSON": session_state.model_dump_json(indent=2),
-            "DYNAMIC_REPORT": dynamic_report,
             "MEMO_DIGEST_JSON": memo_digest.model_dump_json(indent=2),
             "TURN_OUTCOME_JSON": (
                 turn_outcome.model_dump_json(indent=2) if turn_outcome else "{}"
             ),
+            "INSTRUCTION_PACKET_JSON": (
+                instruction_packet.model_dump_json(indent=2) if instruction_packet else "{}"
+            ),
+            "SESSION_STATE_JSON": session_state.model_dump_json(indent=2),
+            "DYNAMIC_REPORT": dynamic_report,
             "CONSULTATION_GUIDE": consultation_guide if consultation_guide else "(No consultation guide available)",
             "AVAILABLE_EXPERTS": available_experts if available_experts else "(No expert information available)",
             "CONSULT_EXPERT_TOOL_SCHEMA": tool_schema if tool_schema else "(Tool schema not available)",
@@ -379,8 +419,8 @@ class AgentRunner:
 
         # Call LLM with retry
         try:
-            result, usage = await self._call_llm_with_retry(prompt, RoadmapManagerResult, max_retries=1)
-            return result, usage
+            result = await self._call_llm_with_retry(prompt, RoadmapManagerResult, max_retries=1)
+            return result
 
         except (LLMError, JSONValidationError) as e:
             logger.error(f"Roadmap manager failed: {e}")
@@ -388,7 +428,7 @@ class AgentRunner:
             return RoadmapManagerResult(
                 instruction_packet=get_default_instruction_packet(),
                 state_update=get_default_state_update()
-            ), {"input_tokens": 0, "output_tokens": 0}
+            )
 
     async def run_roadmap_manager_phase2(
         self,
@@ -429,8 +469,8 @@ class AgentRunner:
 
         # Call LLM with retry
         try:
-            result, usage = await self._call_llm_with_retry(prompt, RoadmapManagerFinalResult, max_retries=1)
-            return result, usage
+            result = await self._call_llm_with_retry(prompt, RoadmapManagerFinalResult, max_retries=1)
+            return result
 
         except (LLMError, JSONValidationError) as e:
             logger.error(f"Roadmap manager phase 2 failed: {e}")
@@ -440,4 +480,4 @@ class AgentRunner:
                 state_update=phase1_result.state_update,
                 expert_consultation_summary="",
                 guidance_for_ca=""
-            ), {"input_tokens": 0, "output_tokens": 0}
+            )

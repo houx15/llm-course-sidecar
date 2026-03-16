@@ -1,14 +1,14 @@
 """Pydantic models for data validation and type safety."""
 
 from typing import Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 import re
 from datetime import datetime
 
 
 class SubtaskStatus(BaseModel):
     """Status of a single subtask."""
-    status: Literal["not_started", "in_progress", "completed"]
+    status: Literal["not_started", "in_progress", "completed", "skipped"]
     evidence: List[str] = Field(default_factory=list)
 
 
@@ -57,7 +57,7 @@ class InstructionPacket(BaseModel):
     """Instructions from Roadmap Manager to Companion Agent."""
     current_focus: str
     guidance_for_ca: str
-    must_check: List[str] = Field(max_length=2, description="Max 2 critical checks")
+    recommended_targets: List[str] = Field(max_length=2, description="Max 2 recommended learning targets to guide the student towards")
     nice_check: List[str] = Field(default_factory=list, max_length=1, description="Max 1 optional check")
     instruction_version: int
     lock_until: Literal[
@@ -69,10 +69,14 @@ class InstructionPacket(BaseModel):
     allow_setup_helper_code: bool
     setup_helper_scope: Literal["none", "file_creation", "env_setup", "path_check", "data_generation"] = "none"
     task_type: Literal["core", "scaffolding"] = "core"
+    suggest_checkpoint_confirmation: bool = Field(
+        default=False,
+        description="When True, CA should ask the student if they want to move to the next task"
+    )
 
-    @field_validator("must_check", mode="before")
+    @field_validator("recommended_targets", mode="before")
     @classmethod
-    def clamp_must_check(cls, v: List[str]) -> List[str]:
+    def clamp_recommended_targets(cls, v: List[str]) -> List[str]:
         return v[:2] if isinstance(v, list) else v
 
     @field_validator("nice_check", mode="before")
@@ -83,28 +87,17 @@ class InstructionPacket(BaseModel):
 
 class SubtaskEvidence(BaseModel):
     """Evidence for a specific subtask."""
-    subtask_id: str = ""
-    evidence: str = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_field_names(cls, data):
-        """Accept common LLM field-name variants."""
-        if isinstance(data, str):
-            # LLM sometimes returns a plain string instead of an object
-            return {"subtask_id": "", "evidence": data}
-        if isinstance(data, dict):
-            # Accept 'subtask' as alias for 'subtask_id'
-            if "subtask" in data and "subtask_id" not in data:
-                data["subtask_id"] = data.pop("subtask")
-            # Accept 'description' as alias for 'evidence'
-            if "description" in data and "evidence" not in data:
-                data["evidence"] = data.pop("description")
-        return data
+    subtask_id: str
+    evidence: str
 
 
 class TurnOutcome(BaseModel):
     """Structured outcome of a single turn from Companion Agent."""
+    # v3.3.0: Objective progress record MUST be first field
+    progress_record: str = Field(
+        default="",
+        description="Objective excerpt of student's substantive output this turn: new ideas, designs, code, answers. Empty string if no progress."
+    )
     what_user_attempted: str
     what_user_observed: str
     ca_teaching_mode: Literal["socratic", "direct"]
@@ -116,15 +109,21 @@ class TurnOutcome(BaseModel):
     # v3.2.0: Expert consultation signal from CA
     expert_consultation_needed: bool = False
     expert_consultation_reason: str = ""  # e.g., "user_requested_data_analysis", "concept_clarification_needed", "error_diagnosis_needed"
+    # v3.3.0: Skip task signal from CA
+    student_wants_to_skip: bool = Field(
+        default=False,
+        description="True when student explicitly wants to skip/end current task"
+    )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_nulls(cls, data):
-        """Coerce null strings to empty string for fields that don't accept None."""
-        if isinstance(data, dict):
-            if data.get("expert_consultation_reason") is None:
-                data["expert_consultation_reason"] = ""
-        return data
+
+class TaskAchievement(BaseModel):
+    """Accumulated learning output for a single task (v3.3.0)."""
+    task_id: str = Field(..., description="Task identifier from task_list.md")
+    accumulated_output: str = Field(
+        default="",
+        description="Cumulative record of student's substantive outputs for this task"
+    )
+    last_updated_turn: int = Field(default=0, ge=0)
 
 
 class MemoDigest(BaseModel):
@@ -136,6 +135,11 @@ class MemoDigest(BaseModel):
     blocker_type: Literal["none", "scaffolding", "core_concept", "core_implementation", "external_resource_needed"]
     progress_delta: Literal["none", "evidence_added", "checkpoint_reached", "regressed"]
     diagnostic_log: List[str] = Field(default_factory=list)
+    # v3.3.0: Per-task achievement log
+    achievement_log: Dict[str, TaskAchievement] = Field(
+        default_factory=dict,
+        description="Per-task cumulative learning output log, keyed by task_id"
+    )
 
 
 class MemoryChunk(BaseModel):

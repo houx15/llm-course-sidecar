@@ -1,5 +1,6 @@
 """Streaming orchestrator for real-time agent responses."""
 
+import re
 import logging
 import asyncio
 from typing import AsyncGenerator, Dict, Optional, Any
@@ -7,21 +8,9 @@ from typing import AsyncGenerator, Dict, Optional, Any
 from .storage import Storage
 from .memory_manager import MemoryManager
 from .agent_runner import AgentRunner
-from .llm_client import LLMError
 from ..models.schemas import InstructionPacket
 
 logger = logging.getLogger(__name__)
-
-
-class TurnCancelled(Exception):
-    """Raised when the user cancels the current turn mid-stream."""
-    pass
-
-
-def _check_cancelled(cancel_event: Optional[asyncio.Event]) -> None:
-    """Raise TurnCancelled if the cancel event has been set."""
-    if cancel_event is not None and cancel_event.is_set():
-        raise TurnCancelled()
 
 
 async def process_turn_stream(
@@ -34,11 +23,9 @@ async def process_turn_stream(
     templates: Dict[str, str],
     available_experts_info: str = "",
     uploaded_files_info_text: str = "",
-    recent_code_executions_text: str = "",
     consultation_guide_text: str = "",
     uploaded_files_info: Optional[Dict[str, Any]] = None,
     consultation_engine: Optional[Any] = None,
-    cancel_event: Optional[asyncio.Event] = None,
 ) -> AsyncGenerator[Dict, None]:
     """
     Process a turn with streaming output.
@@ -52,6 +39,7 @@ async def process_turn_stream(
 
     Yields events:
     - {'type': 'start'}
+    - {'type': 'skip_task_confirm', 'current_task_id': '...', 'next_task_id': '...'}
     - {'type': 'consultation_start', 'expert_id': '...', 'title': '...'}
     - {'type': 'consultation_complete', 'expert_id': '...', 'consultation_id': '...'}
     - {'type': 'consultation_error', 'expert_id': '...', 'error': '...'}
@@ -85,47 +73,21 @@ async def process_turn_stream(
 
         current_turn_index = state.turn_index
 
-        # Accumulate token usage across all agent calls in this turn
-        turn_token_usage: Dict[str, Dict[str, int]] = {}
-
-        # Check cancellation before starting expensive LLM calls
-        _check_cancelled(cancel_event)
-
         # STEP 1: Run CA first to judge the current turn
-        try:
-            ca_response, turn_outcome, ca_usage = await agent_runner.run_companion(
-                user_message=user_message,
-                instruction_packet=instruction_packet,
-                dynamic_report=dynamic_report,
-                session_state=state,
-                chapter_context=chapter_content.get("chapter_context", ""),
-                task_list=chapter_content.get("task_list", ""),
-                task_completion_principles=chapter_content.get("task_completion_principles", ""),
-                interaction_protocol=chapter_content.get("interaction_protocol", ""),
-                socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-                memory_long_term=memory_sections["long_term"],
-                memory_mid_term=memory_sections["mid_term"],
-                memory_recent_turns=memory_sections["recent_turns"],
-                available_experts_info=available_experts_info,
-                uploaded_files_info=uploaded_files_info_text,
-                recent_code_executions=recent_code_executions_text,
-            )
-        except LLMError as e:
-            logger.error(f"LLM error in CA step 1: {e}")
-            yield {"type": "llm_error", "error": str(e)}
-            return
-        ca_input = ca_usage.get("input_tokens", 0)
-        ca_output = ca_usage.get("output_tokens", 0)
-        yield {
-            "type": "token_usage",
-            "agent": "CA",
-            "turn_index": current_turn_index,
-            "input_tokens": ca_input,
-            "output_tokens": ca_output,
-        }
-        turn_token_usage.setdefault("CA", {"input_tokens": 0, "output_tokens": 0})
-        turn_token_usage["CA"]["input_tokens"] += ca_input
-        turn_token_usage["CA"]["output_tokens"] += ca_output
+        ca_response, turn_outcome = await agent_runner.run_companion(
+            user_message=user_message,
+            instruction_packet=instruction_packet,
+            dynamic_report=dynamic_report,
+            session_state=state,
+            chapter_context=chapter_content.get("chapter_context", ""),
+            task_list=chapter_content.get("task_list", ""),
+            task_completion_principles=chapter_content.get("task_completion_principles", ""),
+            interaction_protocol=chapter_content.get("interaction_protocol", ""),
+            socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
+            memory_recent_turns=memory_sections["recent_turns"],
+            available_experts_info=available_experts_info,
+            uploaded_files_info=uploaded_files_info_text,
+        )
 
         should_unlock, unlock_reason = _should_unlock_instruction(
             state=state,
@@ -134,6 +96,64 @@ async def process_turn_stream(
             memo_digest=memo_digest,
             uploaded_files_info=uploaded_files_info,
         )
+
+        # v3.4.0: Diagnostic logging for skip detection
+        skip_flag = getattr(turn_outcome, "student_wants_to_skip", None)
+        logger.info(
+            f"[SKIP-DIAG] turn_outcome.student_wants_to_skip={skip_flag}, "
+            f"should_unlock={should_unlock}, unlock_reason={unlock_reason}"
+        )
+
+        # v3.4.0: Skip task confirmation — intercept before RMA
+        if unlock_reason == "student_wants_to_skip":
+            current_task_id = _extract_task_id(instruction_packet.current_focus)
+            next_task_id = _find_next_task_id(state.subtask_status, current_task_id)
+            logger.info(f"Skip task requested: current={current_task_id}, next={next_task_id}")
+
+            # Yield confirmation event as a dialogue option box in chat
+            yield {
+                "type": "chat",
+                "role": "assistant",
+                "content": f"看起来你希望跳过当前任务 ({current_task_id or 'unknown'})，是否确定跳过并进入下一环节 ({next_task_id or 'none'})？",
+                "options": [
+                    {"label": "确认跳过", "action": "skip_task"},
+                    {"label": "暂不跳过", "action": "cancel"}
+                ]
+            }
+
+            # Stream CA's response (CA already acknowledged the skip intent)
+            yield {"type": "companion_start"}
+            for char in ca_response:
+                yield {"type": "companion_chunk", "content": char}
+                await asyncio.sleep(0.02)
+            yield {"type": "companion_complete"}
+
+            # Save turn data without running RMA — RMA deferred to /skip_task API
+            state.turn_index = current_turn_index + 1
+            storage.save_state(session_id, state)
+            storage.save_turn(
+                session_id=session_id,
+                turn_index=current_turn_index,
+                user_message=user_message,
+                companion_response=ca_response,
+                turn_outcome=turn_outcome.model_dump(),
+            )
+
+            # Run MA to update report even for skip turns
+            memo_result = await agent_runner.run_memo(
+                user_message=user_message,
+                companion_response=ca_response,
+                turn_outcome=turn_outcome,
+                current_report=dynamic_report,
+                session_state=state,
+                dynamic_report_template=templates.get("dynamic_report_template", ""),
+                student_error_summary_template=templates.get("student_error_summary_template", ""),
+                final_learning_report_template=templates.get("final_learning_report_template", ""),
+            )
+            storage.save_dynamic_report(session_id, memo_result.updated_report)
+            storage.save_memo_digest(session_id, memo_result.digest)
+
+            return  # Exit early — RMA will run when user confirms skip via API
 
         if not should_unlock and unlock_reason.startswith("lock_until_"):
             previous_blocker_type = "none"
@@ -162,12 +182,9 @@ async def process_turn_stream(
         rma_final_result = None
         new_instruction = instruction_packet
 
-        # Check cancellation before RMA (expensive multi-agent step)
-        _check_cancelled(cancel_event)
-
         # STEP 2: Run RMA (and expert) only if current-turn judgment unlocks
         if should_unlock:
-            rma_result, rma_usage = await agent_runner.run_roadmap_manager(
+            rma_result = await agent_runner.run_roadmap_manager(
                 dynamic_report=dynamic_report,
                 memo_digest=memo_digest,
                 session_state=state,
@@ -179,18 +196,6 @@ async def process_turn_stream(
                 available_experts=available_experts_info,
                 uploaded_files_info=uploaded_files_info,
             )
-            rma_input = rma_usage.get("input_tokens", 0)
-            rma_output = rma_usage.get("output_tokens", 0)
-            yield {
-                "type": "token_usage",
-                "agent": "RMA",
-                "turn_index": current_turn_index,
-                "input_tokens": rma_input,
-                "output_tokens": rma_output,
-            }
-            turn_token_usage.setdefault("RMA", {"input_tokens": 0, "output_tokens": 0})
-            turn_token_usage["RMA"]["input_tokens"] += rma_input
-            turn_token_usage["RMA"]["output_tokens"] += rma_output
 
             if not rma_result.consultation_request:
                 storage.append_system_event(
@@ -256,24 +261,12 @@ async def process_turn_stream(
                     expert_id = rma_result.consultation_request.expert_id
                     expert_description = _get_expert_description(expert_id)
 
-                    rma_final_result, rma_phase2_usage = await agent_runner.run_roadmap_manager_phase2(
+                    rma_final_result = await agent_runner.run_roadmap_manager_phase2(
                         phase1_result=rma_result,
                         expert_output=consultation_result.get("expert_output", {}),
                         expert_description=expert_description,
                         session_state=state,
                     )
-                    rma2_input = rma_phase2_usage.get("input_tokens", 0)
-                    rma2_output = rma_phase2_usage.get("output_tokens", 0)
-                    yield {
-                        "type": "token_usage",
-                        "agent": "RMA",
-                        "turn_index": current_turn_index,
-                        "input_tokens": rma2_input,
-                        "output_tokens": rma2_output,
-                    }
-                    turn_token_usage.setdefault("RMA", {"input_tokens": 0, "output_tokens": 0})
-                    turn_token_usage["RMA"]["input_tokens"] += rma2_input
-                    turn_token_usage["RMA"]["output_tokens"] += rma2_output
 
                     new_instruction = rma_final_result.instruction_packet
                     storage.save_instruction_packet(session_id, new_instruction)
@@ -307,60 +300,82 @@ async def process_turn_stream(
             if rma_final_result:
                 rma_guidance = f"{rma_final_result.expert_consultation_summary}\n\n{rma_final_result.guidance_for_ca}"
 
-            try:
-                ca_response, turn_outcome, ca2_usage = await agent_runner.run_companion(
-                    user_message=user_message,
-                    instruction_packet=new_instruction,
-                    dynamic_report=dynamic_report,
-                    session_state=state,
-                    chapter_context=chapter_content.get("chapter_context", ""),
-                    task_list=chapter_content.get("task_list", ""),
-                    task_completion_principles=chapter_content.get("task_completion_principles", ""),
-                    interaction_protocol=chapter_content.get("interaction_protocol", ""),
-                    socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-                    memory_long_term=memory_sections["long_term"],
-                    memory_mid_term=memory_sections["mid_term"],
-                    memory_recent_turns=memory_sections["recent_turns"],
-                    available_experts_info=available_experts_info,
-                    uploaded_files_info=uploaded_files_info_text,
-                    recent_code_executions=recent_code_executions_text,
-                    expert_output_summary=rma_guidance,
+            ca_response, turn_outcome = await agent_runner.run_companion(
+                user_message=user_message,
+                instruction_packet=new_instruction,
+                dynamic_report=dynamic_report,
+                session_state=state,
+                chapter_context=chapter_content.get("chapter_context", ""),
+                task_list=chapter_content.get("task_list", ""),
+                task_completion_principles=chapter_content.get("task_completion_principles", ""),
+                interaction_protocol=chapter_content.get("interaction_protocol", ""),
+                socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
+                memory_recent_turns=memory_sections["recent_turns"],
+                available_experts_info=available_experts_info,
+                uploaded_files_info=uploaded_files_info_text,
+                expert_output_summary=rma_guidance,
+            )
+
+            # v3.4.1: Stage 2 skip re-check — catch skip intent missed by Stage 1
+            if getattr(turn_outcome, "student_wants_to_skip", False):
+                current_task_id = _extract_task_id(new_instruction.current_focus)
+                next_task_id = _find_next_task_id(state.subtask_status, current_task_id)
+                logger.info(
+                    f"[SKIP-DIAG] Stage 2 detected skip (Stage 1 missed): "
+                    f"current={current_task_id}, next={next_task_id}"
                 )
-            except LLMError as e:
-                logger.error(f"LLM error in CA step 2: {e}")
-                yield {"type": "llm_error", "error": str(e)}
-                return
-            ca2_input = ca2_usage.get("input_tokens", 0)
-            ca2_output = ca2_usage.get("output_tokens", 0)
-            yield {
-                "type": "token_usage",
-                "agent": "CA",
-                "turn_index": current_turn_index,
-                "input_tokens": ca2_input,
-                "output_tokens": ca2_output,
-            }
-            turn_token_usage.setdefault("CA", {"input_tokens": 0, "output_tokens": 0})
-            turn_token_usage["CA"]["input_tokens"] += ca2_input
-            turn_token_usage["CA"]["output_tokens"] += ca2_output
+
+                yield {
+                    "type": "chat",
+                    "role": "assistant",
+                    "content": f"看起来你希望跳过当前任务 ({current_task_id or 'unknown'})，是否确定跳过并进入下一环节 ({next_task_id or 'none'})？",
+                    "options": [
+                        {"label": "确认跳过", "action": "skip_task"},
+                        {"label": "暂不跳过", "action": "cancel"}
+                    ]
+                }
+
+                yield {"type": "companion_start"}
+                for char in ca_response:
+                    yield {"type": "companion_chunk", "content": char}
+                    await asyncio.sleep(0.02)
+                yield {"type": "companion_complete"}
+
+                state.turn_index = current_turn_index + 1
+                storage.save_state(session_id, state)
+                storage.save_turn(
+                    session_id=session_id,
+                    turn_index=current_turn_index,
+                    user_message=user_message,
+                    companion_response=ca_response,
+                    turn_outcome=turn_outcome.model_dump(),
+                )
+
+                memo_result = await agent_runner.run_memo(
+                    user_message=user_message,
+                    companion_response=ca_response,
+                    turn_outcome=turn_outcome,
+                    current_report=dynamic_report,
+                    session_state=state,
+                    dynamic_report_template=templates.get("dynamic_report_template", ""),
+                    student_error_summary_template=templates.get("student_error_summary_template", ""),
+                    final_learning_report_template=templates.get("final_learning_report_template", ""),
+                )
+                storage.save_dynamic_report(session_id, memo_result.updated_report)
+                storage.save_memo_digest(session_id, memo_result.digest)
+
+                return  # Exit early — skip confirmation deferred to /skip_task API
 
         # STEP 4: Stream CA response to user immediately
-        _check_cancelled(cancel_event)
         yield {"type": "companion_start"}
         for char in ca_response:
-            # Check cancellation periodically during streaming (every ~50 chars)
-            if cancel_event is not None and cancel_event.is_set():
-                yield {"type": "companion_complete"}
-                raise TurnCancelled()
             yield {"type": "companion_chunk", "content": char}
             await asyncio.sleep(0.02)
 
         yield {"type": "companion_complete"}
 
-        # Check cancellation before running MA (saves us an LLM call)
-        _check_cancelled(cancel_event)
-
         # STEP 5: Run MA in background (non-blocking for user)
-        memo_result, ma_usage = await agent_runner.run_memo(
+        memo_result = await agent_runner.run_memo(
             user_message=user_message,
             companion_response=ca_response,
             turn_outcome=turn_outcome,
@@ -370,18 +385,6 @@ async def process_turn_stream(
             student_error_summary_template=templates.get("student_error_summary_template", ""),
             final_learning_report_template=templates.get("final_learning_report_template", ""),
         )
-        ma_input = ma_usage.get("input_tokens", 0)
-        ma_output = ma_usage.get("output_tokens", 0)
-        yield {
-            "type": "token_usage",
-            "agent": "MA",
-            "turn_index": current_turn_index,
-            "input_tokens": ma_input,
-            "output_tokens": ma_output,
-        }
-        turn_token_usage.setdefault("MA", {"input_tokens": 0, "output_tokens": 0})
-        turn_token_usage["MA"]["input_tokens"] += ma_input
-        turn_token_usage["MA"]["output_tokens"] += ma_output
 
         # Update state based on unlock and progress
         if should_unlock:
@@ -401,23 +404,19 @@ async def process_turn_stream(
         state.turn_index = current_turn_index + 1
         storage.save_state(session_id, state)
 
-        # Save turn data (including accumulated token usage)
+        # Save turn data
         storage.save_turn(
             session_id=session_id,
             turn_index=current_turn_index,
             user_message=user_message,
             companion_response=ca_response,
             turn_outcome=turn_outcome.model_dump(),
-            token_usage=turn_token_usage if turn_token_usage else None,
         )
 
         # Save updated report
         storage.save_dynamic_report(session_id, memo_result.updated_report)
         storage.save_memo_digest(session_id, memo_result.digest)
 
-    except TurnCancelled:
-        logger.info(f"Turn cancelled for session {session_id}, discarding turn {current_turn_index}")
-        raise  # propagate to caller — no turn saved
     except Exception as e:
         logger.error(f"Error in streaming turn: {e}", exc_info=True)
         yield {"type": "error", "message": str(e)}
@@ -437,6 +436,11 @@ def _should_unlock_instruction(
     1. checkpoint_reached = True (CA判定达成检查点)
     2. attempts_exceeded (stuck detection)
     """
+    # v3.4.0: Unlock if student wants to skip current task (must be checked first!)
+    if getattr(turn_outcome, "student_wants_to_skip", False):
+        logger.info("Unlocking: student wants to skip current task")
+        return True, "student_wants_to_skip"
+
     # Unlock if CA signals expert consultation needed
     if getattr(turn_outcome, "expert_consultation_needed", False):
         reason = getattr(turn_outcome, "expert_consultation_reason", "unspecified")
@@ -502,30 +506,11 @@ def _get_expert_description(expert_id: str) -> str:
     """
     from pathlib import Path
     import json
-    import os
 
     try:
-        candidates = []
-        explicit = os.getenv("EXPERT_YELLOW_PAGE_PATH", "").strip()
-        if explicit:
-            candidates.append(Path(explicit))
-
-        experts_dir = os.getenv("EXPERTS_DIR", "").strip()
-        if experts_dir:
-            root = Path(experts_dir)
-            candidates.extend(
-                [
-                    root / "yellow_page.generated.json",
-                    root / ".metadata" / "experts" / "yellow_page.generated.json",
-                    root.parent / "yellow_page.generated.json",
-                    root.parent / ".metadata" / "experts" / "yellow_page.generated.json",
-                ]
-            )
-
-        candidates.append(Path(".metadata/experts/yellow_page.generated.json"))
-        registry_path = next((candidate for candidate in candidates if candidate.exists()), None)
-        if not registry_path:
-            logger.warning("Expert registry not found")
+        registry_path = Path(".metadata/experts/yellow_page.generated.json")
+        if not registry_path.exists():
+            logger.warning(f"Expert registry not found: {registry_path}")
             return f"Expert {expert_id} (description not available)"
 
         with open(registry_path, "r", encoding="utf-8") as f:
@@ -541,3 +526,53 @@ def _get_expert_description(expert_id: str) -> str:
     except Exception as e:
         logger.error(f"Failed to load expert description: {e}")
         return f"Expert {expert_id} (description not available)"
+
+
+def _extract_task_id(current_focus: str) -> str:
+    """
+    Extract task_id from InstructionPacket.current_focus.
+
+    Patterns matched:
+    - "AI研究范式转变地图（ai_research_paradigm_shift_map）" → "ai_research_paradigm_shift_map"
+    - "task: ai_risk_identification" → "ai_risk_identification"
+    - "(task_id_here)" → "task_id_here"
+    """
+    # Try Chinese parentheses first
+    m = re.search(r'[（(]([a-zA-Z0-9_]+)[）)]', current_focus)
+    if m:
+        return m.group(1)
+    # Try extracting after colon/equals
+    m = re.search(r'(?:task|任务)[:\s=]+([a-zA-Z0-9_]+)', current_focus, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    # Fallback: find any snake_case identifier
+    m = re.search(r'\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b', current_focus)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _find_next_task_id(subtask_status: dict, current_task_id: str) -> str:
+    """
+    Find the next unfinished task after current_task_id.
+
+    Iterates subtask_status in insertion order and returns the first
+    task with status 'not_started' or 'in_progress' that isn't the current one.
+    """
+    found_current = False
+    for task_id, status_obj in subtask_status.items():
+        if task_id == current_task_id:
+            found_current = True
+            continue
+        if found_current:
+            st = status_obj.status if hasattr(status_obj, 'status') else status_obj.get('status', '')
+            if st in ('not_started', 'in_progress'):
+                return task_id
+    # If current not found or no next task after it, scan from beginning
+    for task_id, status_obj in subtask_status.items():
+        if task_id == current_task_id:
+            continue
+        st = status_obj.status if hasattr(status_obj, 'status') else status_obj.get('status', '')
+        if st in ('not_started', 'in_progress'):
+            return task_id
+    return ""

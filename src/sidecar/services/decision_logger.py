@@ -2,14 +2,12 @@
 
 import csv
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Callable
 from functools import wraps
 
 logger = logging.getLogger(__name__)
-SESSIONS_ROOT = Path(os.getenv("SESSIONS_DIR", "sessions"))
 
 
 class DecisionLogger:
@@ -29,7 +27,9 @@ class DecisionLogger:
         self.consultation_id = consultation_id
 
         # Create log directory
-        self.log_dir = SESSIONS_ROOT / session_id / "working_files" / "expert_logs" / consultation_id
+        self.log_dir = (
+            Path("sessions") / session_id / "working_files" / "expert_logs" / consultation_id
+        )
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def log_decision(

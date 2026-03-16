@@ -3,9 +3,6 @@
 import logging
 import uuid
 import asyncio
-import math
-import os
-import time
 from pathlib import Path
 from typing import Dict, Optional, List, Any
 
@@ -43,7 +40,6 @@ class Orchestrator:
         memory_manager: Optional[MemoryManager] = None,
         curriculum_dir: str = "curriculum",
         experts_dir: str = "experts",
-        main_agents_dir: Optional[str] = None,
     ):
         """
         Initialize orchestrator.
@@ -60,7 +56,6 @@ class Orchestrator:
         self.memory_manager = memory_manager or MemoryManager(self.storage)
         self.curriculum_dir = Path(curriculum_dir)
         self.experts_dir = Path(experts_dir)
-        self.main_agents_dir = Path(main_agents_dir) if main_agents_dir else None
 
         # v3.0: Initialize consultation engine and report generator
         try:
@@ -78,137 +73,31 @@ class Orchestrator:
         # Session-level locks to prevent concurrent turn processing
         self._session_locks: Dict[str, asyncio.Lock] = {}
 
-    def _get_global_prompt_candidates(self, file_name: str) -> List[Path]:
-        """
-        Build deterministic fallback candidates for chapter-global prompt files.
-        """
-        roots: List[Path] = []
-
-        env_main_agents = os.getenv("MAIN_AGENTS_DIR", "").strip()
-        if env_main_agents:
-            roots.append(Path(env_main_agents))
-
-        if self.main_agents_dir:
-            roots.append(self.main_agents_dir)
-
-        # Repo-level fallback used in local development.
-        repo_root = Path(__file__).resolve().parents[3]
-        roots.append(repo_root / "content" / "agents")
-
-        unique_roots = []
-        seen = set()
-        for root in roots:
-            marker = str(root.resolve()) if root.exists() else str(root)
-            if marker not in seen:
-                seen.add(marker)
-                unique_roots.append(root)
-
-        candidates: List[Path] = []
-        for root in unique_roots:
-            candidates.extend(
-                [
-                    root / file_name,
-                    root / "shared" / file_name,
-                    root / "companion" / file_name,
-                    root / "global" / file_name,
-                ]
-            )
-
-        return candidates
-
-    def _load_global_prompt_fallback(self, file_name: str) -> str:
-        """
-        Load chapter-global prompt markdown using deterministic fallback order.
-        """
-        for candidate in self._get_global_prompt_candidates(file_name):
-            try:
-                if candidate.exists():
-                    logger.info(f"Using global prompt fallback for {file_name}: {candidate}")
-                    return candidate.read_text(encoding="utf-8")
-            except Exception as e:
-                logger.warning(f"Failed reading fallback candidate {candidate}: {e}")
-
-        logger.warning(f"No global prompt fallback found for {file_name}")
-        return ""
-
     def _get_session_lock(self, session_id: str) -> asyncio.Lock:
         """Get or create a lock for a specific session."""
         if session_id not in self._session_locks:
             self._session_locks[session_id] = asyncio.Lock()
         return self._session_locks[session_id]
 
-    def _resolve_chapter_dir(self, chapter_id: str) -> Path:
-        """
-        Resolve the filesystem path for a chapter.
-
-        Supports multiple layouts:
-        - curriculum/{course_id}/{chapter_name}
-        - curriculum/courses/{course_id}/chapters/{chapter_name}
-        - curriculum/chapters/{chapter_name}
-
-        Accepts:
-          - "course_id/chapter_name"  → curriculum_dir/course_id/chapter_name
-          - "chapter_name"            → search common curriculum layouts for a match
-        """
-        if "/" in chapter_id:
-            course_id, chapter_name = chapter_id.split("/", 1)
-            candidates = [
-                self.curriculum_dir / course_id / chapter_name,
-                self.curriculum_dir / "courses" / course_id / "chapters" / chapter_name,
-                self.curriculum_dir
-                / "content"
-                / "curriculum"
-                / "courses"
-                / course_id
-                / "chapters"
-                / chapter_name,
-                self.curriculum_dir / "chapters" / chapter_name,
-            ]
-            for candidate in candidates:
-                if candidate.exists():
-                    return candidate
-            return candidates[0]
-
-        chapter_name = chapter_id
-
-        direct_candidates = [
-            self.curriculum_dir / chapter_name,
-            self.curriculum_dir / "chapters" / chapter_name,
-        ]
-        for candidate in direct_candidates:
-            if candidate.exists():
-                return candidate
-
-        courses_root = self.curriculum_dir / "courses"
-        if courses_root.exists():
-            for course_dir in sorted(courses_root.iterdir()):
-                if not course_dir.is_dir():
-                    continue
-                candidate = course_dir / "chapters" / chapter_name
-                if candidate.exists():
-                    return candidate
-
-        # No course prefix — walk course subdirectories to find the chapter
-        for course_dir in sorted(self.curriculum_dir.iterdir()):
-            if course_dir.is_dir():
-                candidate = course_dir / chapter_name
-                if candidate.exists():
-                    return candidate
-
-        # Return a non-existent path so the caller can raise a consistent error
-        return self.curriculum_dir / chapter_name
-
     def _load_chapter_content(self, chapter_id: str) -> Dict[str, str]:
         """
         Load all content files for a chapter.
 
         Args:
-            chapter_id: Can be either "course_id/chapter_name" or bare "chapter_name"
+            chapter_id: Can be either "course_id/chapter_name" (new format)
+                       or "chapter_name" (legacy format)
 
         Returns:
             Dictionary with content for each file
         """
-        chapter_dir = self._resolve_chapter_dir(chapter_id)
+        # Support both new format (course_id/chapter_name) and legacy format (chapter_name)
+        if "/" in chapter_id:
+            # New format: course_id/chapter_name
+            course_id, chapter_name = chapter_id.split("/", 1)
+            chapter_dir = self.curriculum_dir / "courses" / course_id / "chapters" / chapter_name
+        else:
+            # Legacy format: chapter_name (look in old chapters directory)
+            chapter_dir = self.curriculum_dir / "chapters" / chapter_id
 
         if not chapter_dir.exists():
             raise OrchestratorError(f"Chapter not found: {chapter_id}")
@@ -229,13 +118,8 @@ class Orchestrator:
                     key = file_name.replace(".md", "")
                     content[key] = f.read()
             else:
-                key = file_name.replace(".md", "")
-                if file_name in ("interaction_protocol.md", "socratic_vs_direct.md"):
-                    content[key] = self._load_global_prompt_fallback(file_name)
-                    if content[key]:
-                        continue
                 logger.warning(f"Chapter file not found: {file_path}")
-                content[key] = ""
+                content[file_name.replace(".md", "")] = ""
 
         return content
 
@@ -246,7 +130,11 @@ class Orchestrator:
         Returns:
             True if any consultation config/guide file exists, False otherwise.
         """
-        chapter_dir = self._resolve_chapter_dir(chapter_id)
+        if "/" in chapter_id:
+            course_id, chapter_name = chapter_id.split("/", 1)
+            chapter_dir = self.curriculum_dir / "courses" / course_id / "chapters" / chapter_name
+        else:
+            chapter_dir = self.curriculum_dir / "chapters" / chapter_id
 
         if not chapter_dir.exists():
             return False
@@ -297,8 +185,8 @@ class Orchestrator:
 
             # Load yellow page
             from .yellow_page_generator import load_yellow_page, get_expert_by_id
-            yellow_page_path = self._resolve_yellow_page_path()
-            yellow_page = load_yellow_page(yellow_page_path) if yellow_page_path else None
+            yellow_page_path = Path(".metadata/experts/yellow_page.generated.json")
+            yellow_page = load_yellow_page(yellow_page_path)
 
             if not yellow_page:
                 logger.warning("Yellow page not found, cannot load expert info")
@@ -325,36 +213,6 @@ class Orchestrator:
         except Exception as e:
             logger.warning(f"Failed to load available experts info for {chapter_id}: {e}")
             return ""
-
-    def _resolve_yellow_page_path(self) -> Optional[Path]:
-        """
-        Resolve yellow page path for expert metadata.
-
-        Priority:
-        1. EXPERT_YELLOW_PAGE_PATH env
-        2. Paths near current experts root
-        3. Legacy cwd-relative fallback
-        """
-        env_path = os.getenv("EXPERT_YELLOW_PAGE_PATH", "").strip()
-        candidates: List[Path] = []
-        if env_path:
-            candidates.append(Path(env_path))
-
-        experts_root = self.experts_dir
-        candidates.extend(
-            [
-                experts_root / "yellow_page.generated.json",
-                experts_root / ".metadata" / "experts" / "yellow_page.generated.json",
-                experts_root.parent / "yellow_page.generated.json",
-                experts_root.parent / ".metadata" / "experts" / "yellow_page.generated.json",
-                Path(".metadata/experts/yellow_page.generated.json"),
-            ]
-        )
-
-        for candidate in candidates:
-            if candidate.exists():
-                return candidate
-        return None
 
     def _format_uploaded_files_for_ca(
         self,
@@ -409,61 +267,6 @@ class Orchestrator:
             lines.append("")
 
         return "\n".join(lines)
-
-    def _format_recent_code_executions_for_ca(self, executions: List[Dict[str, Any]]) -> str:
-        """Format recent code executions for CA prompt injection."""
-        if not executions:
-            return ""
-
-        def _clip_text(value: Any, limit: int) -> str:
-            text = str(value or "")
-            if len(text) <= limit:
-                return text
-            return text[:limit] + "\n...[truncated]..."
-
-        now = time.time()
-        lines = ["## 学生最近的代码执行", ""]
-        for idx, record in enumerate(executions, 1):
-            try:
-                timestamp = float(record.get("timestamp", now))
-                if not math.isfinite(timestamp):
-                    raise ValueError("timestamp is not finite")
-            except (TypeError, ValueError):
-                logger.warning("Skipping malformed code history record with invalid timestamp: %s", record)
-                continue
-            try:
-                age_seconds = max(0, int(now - timestamp))
-            except (TypeError, ValueError, OverflowError):
-                logger.warning("Skipping malformed code history record with unbounded age: %s", record)
-                continue
-            if age_seconds < 60:
-                age_label = f"{age_seconds} 秒前"
-            else:
-                age_label = f"{max(1, age_seconds // 60)} 分钟前"
-
-            try:
-                exit_code = int(record.get("exit_code", 0))
-            except (TypeError, ValueError):
-                logger.warning("Skipping malformed code history record with invalid exit_code: %s", record)
-                continue
-
-            code = _clip_text(record.get("code"), 1000).strip()
-            stdout = _clip_text(record.get("stdout"), 800).strip()
-            stderr = _clip_text(record.get("stderr"), 800).strip()
-            status = "成功" if exit_code == 0 else "失败"
-            output = stdout if stdout else stderr if stderr else "(无输出)"
-
-            lines.append(f"### 执行 {idx} ({age_label})")
-            lines.append("```python")
-            lines.append(code or "# 无代码")
-            lines.append("```")
-            lines.append(f"**输出:** ({status})")
-            lines.append("```")
-            lines.append(output)
-            lines.append("```")
-            lines.append("")
-
-        return "\n".join(lines) if len(lines) > 2 else ""
 
     def _load_consultation_guide_text(self, chapter_id: str) -> str:
         """
@@ -618,6 +421,11 @@ class Orchestrator:
         Returns:
             (should_unlock, reason) tuple
         """
+        # v3.3.0: Unlock if student wants to skip current task
+        if hasattr(turn_outcome, 'student_wants_to_skip') and turn_outcome.student_wants_to_skip:
+            logger.info("Unlocking instruction: student wants to skip current task")
+            return True, "student_wants_to_skip"
+
         # v3.2.0: Unlock if CA signals expert consultation needed
         if hasattr(turn_outcome, 'expert_consultation_needed') and turn_outcome.expert_consultation_needed:
             reason = getattr(turn_outcome, 'expert_consultation_reason', 'unspecified')
@@ -661,15 +469,16 @@ class Orchestrator:
         logger.info(f"Keeping instruction locked (version {current_instruction.instruction_version})")
         return False, "lock_until_not_met"
 
-    async def create_session(self, chapter_id: str, eager_llm_init: bool = True) -> str:
+    async def create_session(self, chapter_id: str) -> str:
         """
         Create new session and initialize with 5-step flow.
 
         Steps:
         1. Load chapter config
         2. Create session folder and initial state
-        3. Fast path: save default instruction/memo and return (no startup LLM calls)
-        4. Optional eager path: call RMA/CA/MA to fully initialize session
+        3. Call RMA for initial instruction packet
+        4. Call CA for first message
+        5. Call MA to initialize reports
 
         Returns:
             Session ID
@@ -707,20 +516,6 @@ class Orchestrator:
             self.storage.create_session(session_id, chapter_id, initial_state)
             self.memory_manager.initialize_session(session_id)
 
-            if not eager_llm_init:
-                from .json_utils import (
-                    get_default_instruction_packet,
-                    get_default_memo_digest,
-                )
-
-                self.storage.save_instruction_packet(
-                    session_id, get_default_instruction_packet()
-                )
-                self.storage.save_memo_digest(session_id, get_default_memo_digest())
-                self.storage.save_dynamic_report(session_id, "")
-                logger.info(f"Session created with fast init: {session_id}")
-                return session_id
-
             # Step 3: Call RMA for initial instruction packet
             logger.info("Calling RMA for initial instruction")
             initial_digest = {
@@ -730,7 +525,8 @@ class Orchestrator:
                 "student_sentiment": "engaged",
                 "blocker_type": "none",
                 "progress_delta": "none",
-                "diagnostic_log": []
+                "diagnostic_log": [],
+                "achievement_log": {}
             }
 
             # Load consultation guide for RMA (v3.1)
@@ -738,7 +534,7 @@ class Orchestrator:
             available_experts_info = self._load_available_experts_info(chapter_id)
 
             from ..models.schemas import MemoDigest
-            rma_result, _ = await self.agent_runner.run_roadmap_manager(
+            rma_result = await self.agent_runner.run_roadmap_manager(
                 dynamic_report="",
                 memo_digest=MemoDigest(**initial_digest),
                 session_state=initial_state,
@@ -765,7 +561,7 @@ class Orchestrator:
                 user_message_length=len(initial_user_message),
             )
 
-            ca_response, turn_outcome, _ = await self.agent_runner.run_companion(
+            ca_response, turn_outcome = await self.agent_runner.run_companion(
                 user_message=initial_user_message,
                 instruction_packet=rma_result.instruction_packet,
                 dynamic_report="",
@@ -775,9 +571,8 @@ class Orchestrator:
                 task_completion_principles=chapter_content.get("task_completion_principles", ""),
                 interaction_protocol=chapter_content.get("interaction_protocol", ""),
                 socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-                memory_long_term=memory_sections["long_term"],
-                memory_mid_term=memory_sections["mid_term"],
                 memory_recent_turns=memory_sections["recent_turns"],
+                memo_digest=MemoDigest(**initial_digest),  # v3.4.1: Access to achievement log
             )
 
             # Save initial turn
@@ -791,7 +586,7 @@ class Orchestrator:
 
             # Step 5: Call MA to initialize reports
             logger.info("Calling MA to initialize reports")
-            memo_result, _ = await self.agent_runner.run_memo(
+            memo_result = await self.agent_runner.run_memo(
                 user_message=initial_user_message,
                 companion_response=ca_response,
                 turn_outcome=turn_outcome,
@@ -855,13 +650,10 @@ class Orchestrator:
 
             instruction_packet = self.storage.load_instruction_packet(session_id)
             dynamic_report = self.storage.load_dynamic_report(session_id)
+            memo_digest = self.storage.load_memo_digest(session_id)  # v3.4.1
             memory_sections = self.memory_manager.build_memory_sections(
                 session_id=session_id,
                 user_message_length=len(user_message),
-            )
-            recent_code_executions = self.storage.get_recent_code_executions(session_id, limit=3)
-            recent_code_executions_text = self._format_recent_code_executions_for_ca(
-                recent_code_executions
             )
 
             chapter_content = self._load_chapter_content(state.chapter_id)
@@ -904,7 +696,7 @@ class Orchestrator:
             perf_tracker.start_operation("run_companion", {"phase": "initial"})
 
             try:
-                ca_response, turn_outcome, _ = await self.agent_runner.run_companion(
+                ca_response, turn_outcome = await self.agent_runner.run_companion(
                     user_message=user_message,
                     instruction_packet=instruction_packet,
                     dynamic_report=dynamic_report,
@@ -914,12 +706,10 @@ class Orchestrator:
                     task_completion_principles=chapter_content.get("task_completion_principles", ""),
                     interaction_protocol=chapter_content.get("interaction_protocol", ""),
                     socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-                    memory_long_term=memory_sections["long_term"],
-                    memory_mid_term=memory_sections["mid_term"],
                     memory_recent_turns=memory_sections["recent_turns"],
                     available_experts_info=available_experts_info,  # v3.2.0: Pass expert info
                     uploaded_files_info=uploaded_files_info_text,  # v3.2.0: Pass uploaded files info
-                    recent_code_executions=recent_code_executions_text,  # v3.3.0
+                    memo_digest=memo_digest,  # v3.4.1: Pass achievement log to CA
                 )
                 perf_tracker.end_operation(success=True)
 
@@ -991,11 +781,12 @@ class Orchestrator:
 
                 perf_tracker.start_operation("run_roadmap_manager")
                 try:
-                    rma_result, _ = await self.agent_runner.run_roadmap_manager(
+                    rma_result = await self.agent_runner.run_roadmap_manager(
                         dynamic_report=dynamic_report,
                         memo_digest=previous_memo_digest,
                         session_state=state,
                         turn_outcome=turn_outcome,
+                        instruction_packet=instruction_packet,  # v3.3.0: Pass current instruction packet
                         chapter_context=chapter_content.get("chapter_context", ""),
                         task_list=chapter_content.get("task_list", ""),
                         task_completion_principles=chapter_content.get("task_completion_principles", ""),
@@ -1087,7 +878,7 @@ class Orchestrator:
                     logger.info("Re-running Companion Agent after RMA update")
                     perf_tracker.start_operation("run_companion", {"phase": "after_rma"})
                     try:
-                        final_response, final_turn_outcome, _ = await self.agent_runner.run_companion(
+                        final_response, final_turn_outcome = await self.agent_runner.run_companion(
                             user_message=user_message,
                             instruction_packet=final_instruction,
                             dynamic_report=dynamic_report,
@@ -1097,12 +888,10 @@ class Orchestrator:
                             task_completion_principles=chapter_content.get("task_completion_principles", ""),
                             interaction_protocol=chapter_content.get("interaction_protocol", ""),
                             socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-                            memory_long_term=memory_sections["long_term"],
-                            memory_mid_term=memory_sections["mid_term"],
                             memory_recent_turns=memory_sections["recent_turns"],
                             available_experts_info=available_experts_info,
                             uploaded_files_info=uploaded_files_info_text,
-                            recent_code_executions=recent_code_executions_text,
+                            memo_digest=memo_digest,  # v3.4.1: Pass achievement log to CA
                         )
                         turn_outcome = final_turn_outcome
                         perf_tracker.end_operation(success=True)
@@ -1137,7 +926,7 @@ class Orchestrator:
             logger.info("Calling Memo Agent")
             perf_tracker.start_operation("run_memo")
             try:
-                memo_result, _ = await self.agent_runner.run_memo(
+                memo_result = await self.agent_runner.run_memo(
                     user_message=user_message,
                     companion_response=final_response,
                     turn_outcome=turn_outcome,
@@ -1428,7 +1217,100 @@ class Orchestrator:
             logger.error(f"Failed to end session: {e}")
             raise OrchestratorError(f"结束会话失败: {e}")
 
-    async def process_turn_stream(self, session_id: str, user_message: str, cancel_event=None):
+    async def execute_skip_task(
+        self, session_id: str, current_task_id: str, next_task_id: str
+    ) -> dict:
+        """
+        Execute task skip after user confirmation (v3.4.0).
+
+        1. Mark current task as 'skipped' in session state
+        2. Call RMA with skip context to generate new InstructionPacket
+        3. Save updated state and instruction
+        4. Return guidance for frontend display
+        """
+        try:
+            state = self.storage.load_state(session_id)
+            dynamic_report = self.storage.load_dynamic_report(session_id)
+            memo_digest = self.storage.load_memo_digest(session_id) or {}
+            chapter_content = self._load_chapter_content(state.chapter_id)
+
+            # Mark current task as skipped
+            if current_task_id in state.subtask_status:
+                state.subtask_status[current_task_id].status = "skipped"
+                logger.info(f"Marked task '{current_task_id}' as skipped")
+            else:
+                logger.warning(f"Task '{current_task_id}' not found in subtask_status")
+
+            # Construct synthetic TurnOutcome for RMA
+            from ..models.schemas import TurnOutcome
+            skip_turn_outcome = TurnOutcome(
+                progress_record="",
+                what_user_attempted="学生请求跳过当前任务",
+                what_user_observed="",
+                ca_teaching_mode="direct",
+                ca_next_suggestion=f"引导学生进入任务 {next_task_id}",
+                checkpoint_reached=False,
+                blocker_type="none",
+                student_sentiment="engaged",
+                student_wants_to_skip=True,
+            )
+
+            # Call RMA to generate new instruction for next task
+            available_experts_info = self._load_available_experts_info(state.chapter_id)
+            consultation_guide_text = self._load_consultation_guide_text(state.chapter_id)
+
+            rma_result = await self.agent_runner.run_roadmap_manager(
+                dynamic_report=dynamic_report,
+                memo_digest=memo_digest,
+                session_state=state,
+                turn_outcome=skip_turn_outcome,
+                chapter_context=chapter_content.get("chapter_context", ""),
+                task_list=chapter_content.get("task_list", ""),
+                task_completion_principles=chapter_content.get("task_completion_principles", ""),
+                consultation_guide=consultation_guide_text,
+                available_experts=available_experts_info,
+                uploaded_files_info={"has_uploaded_files": False, "file_count": 0, "files": []},
+            )
+
+            # Update instruction
+            new_instruction = rma_result.instruction_packet
+            new_instruction.instruction_version = state.current_instruction_version + 1
+            self.storage.save_instruction_packet(session_id, new_instruction)
+
+            # Update state
+            state.update(rma_result.state_update)
+            state.current_instruction_version = new_instruction.instruction_version
+            state.attempts_since_last_progress = 0
+            self.storage.save_state(session_id, state)
+
+            # Log event
+            self.storage.append_system_event(
+                session_id,
+                "task_skipped",
+                f"学生确认跳过任务 {current_task_id}",
+                {
+                    "skipped_task_id": current_task_id,
+                    "next_task_id": next_task_id,
+                    "new_instruction_version": new_instruction.instruction_version,
+                },
+            )
+
+            guidance = rma_result.guidance_for_ca if hasattr(rma_result, 'guidance_for_ca') else ""
+
+            return {
+                "success": True,
+                "skipped_task_id": current_task_id,
+                "next_task_id": next_task_id,
+                "new_focus": new_instruction.current_focus,
+                "guidance": guidance,
+                "message": f"已跳过任务 {current_task_id}，准备进入 {next_task_id}",
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to execute skip task: {e}", exc_info=True)
+            raise OrchestratorError(f"跳过任务失败: {e}")
+
+    async def process_turn_stream(self, session_id: str, user_message: str):
         """
         Process a turn with streaming output.
 
@@ -1441,10 +1323,6 @@ class Orchestrator:
         templates = self._load_templates()
         available_experts_info = self._load_available_experts_info(state.chapter_id)
         consultation_guide_text = self._load_consultation_guide_text(state.chapter_id)
-        recent_code_executions = self.storage.get_recent_code_executions(session_id, limit=3)
-        recent_code_executions_text = self._format_recent_code_executions_for_ca(
-            recent_code_executions
-        )
         last_turn_time = self.storage.get_last_turn_timestamp(session_id)
         uploaded_files_metadata = self.storage.get_uploaded_files_metadata(session_id)
         uploaded_files_info_text = self._format_uploaded_files_for_ca(
@@ -1483,10 +1361,8 @@ class Orchestrator:
             templates=templates,
             available_experts_info=available_experts_info,
             uploaded_files_info_text=uploaded_files_info_text,
-            recent_code_executions_text=recent_code_executions_text,
             consultation_guide_text=consultation_guide_text,
             uploaded_files_info=uploaded_files_info,
             consultation_engine=self.consultation_engine,
-            cancel_event=cancel_event,
         ):
             yield event

@@ -1,0 +1,46 @@
+{
+  "experts": [
+    {
+      "expert_id": "concept_explainer",
+      "description": "解释数据科学和编程概念，提供清晰的定义、示例和类比，帮助学生理解抽象概念",
+      "tags": [
+        "concept",
+        "explanation",
+        "pedagogy",
+        "examples",
+        "analogies"
+      ],
+      "skill_handles": [
+        "explain_concept",
+        "provide_analogy",
+        "generate_example"
+      ],
+      "output_modes": [
+        "concept_explanation",
+        "analogy",
+        "code_example"
+      ]
+    },
+    {
+      "expert_id": "data_inspector",
+      "description": "检查数据集的结构、缺失值、数据类型和教学适用性，提供基于证据的判断",
+      "tags": [
+        "data",
+        "pandas",
+        "missing-values",
+        "schema",
+        "dataset-validation"
+      ],
+      "skill_handles": [
+        "inspect_dataset",
+        "profile_dataset",
+        "check_suitability"
+      ],
+      "output_modes": [
+        "suitability_judgment",
+        "dataset_overview_report",
+        "schema_analysis"
+      ]
+    }
+  ]
+}

@@ -8,7 +8,6 @@ Executes Python code in a separate virtual environment with resource limits.
 import subprocess
 import json
 import os
-import sys
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -41,10 +40,6 @@ class ExpertSandbox:
             project_root = Path(__file__).parent.parent.parent.parent
 
         self.project_root = project_root
-        self.sessions_dir = Path(os.getenv("SESSIONS_DIR", str(project_root / "sessions"))).resolve()
-        self.services_dir = Path(
-            os.getenv("SIDECAR_SERVICES_DIR", str(Path(__file__).resolve().parent))
-        ).resolve()
         self.expert_env_path = project_root / ".expert_env"
         self.expert_python = self.expert_env_path / "bin" / "python"
 
@@ -173,9 +168,10 @@ class ExpertSandbox:
         code = f"""
 import sys
 import json
+from pathlib import Path
 
-# Add sidecar services directory to path
-sys.path.insert(0, {json.dumps(str(self.services_dir))})
+# Add app/server/services to path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "app" / "server" / "services"))
 
 # Import the skill module
 from {skill_module} import *
@@ -235,7 +231,7 @@ except Exception as e:
 
             try:
                 result = subprocess.run(
-                    [sys.executable, temp_file],
+                    ["python", temp_file],
                     cwd=str(working_dir),
                     capture_output=True,
                     timeout=timeout,
@@ -287,7 +283,10 @@ except Exception as e:
             abs_working_dir = working_dir.resolve()
 
             # Must be within sessions/ directory
-            return str(abs_working_dir).startswith(str(self.sessions_dir))
+            sessions_dir = (self.project_root / "sessions").resolve()
+
+            # Check if working_dir is under sessions/
+            return str(abs_working_dir).startswith(str(sessions_dir))
 
         except Exception as e:
             logger.error(f"Error validating working directory: {e}")

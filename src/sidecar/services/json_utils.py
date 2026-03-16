@@ -175,7 +175,7 @@ def get_default_instruction_packet() -> InstructionPacket:
     return InstructionPacket(
         current_focus="继续当前任务",
         guidance_for_ca="继续引导学习者完成当前任务",
-        must_check=["检查学习者是否理解当前概念"],
+        recommended_targets=["检查学习者是否理解当前概念"],
         nice_check=[],
         instruction_version=1,
         lock_until="checkpoint_reached",
@@ -188,13 +188,15 @@ def get_default_instruction_packet() -> InstructionPacket:
 def get_default_turn_outcome() -> TurnOutcome:
     """Get default turn outcome for error recovery."""
     return TurnOutcome(
+        progress_record="",
         what_user_attempted="用户尝试继续学习",
         what_user_observed="用户正在探索",
         ca_teaching_mode="socratic",
         ca_next_suggestion="继续探索当前主题",
         checkpoint_reached=False,
         blocker_type="none",
-        student_sentiment="engaged"
+        student_sentiment="engaged",
+        student_wants_to_skip=False,
     )
 
 
@@ -207,7 +209,8 @@ def get_default_memo_digest() -> MemoDigest:
         student_sentiment="engaged",
         blocker_type="none",
         progress_delta="none",
-        diagnostic_log=[]
+        diagnostic_log=[],
+        achievement_log={},
     )
 
 

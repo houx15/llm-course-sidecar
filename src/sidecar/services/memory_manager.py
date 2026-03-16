@@ -31,23 +31,14 @@ class MemoryManager:
         user_message_length: int,
     ) -> Dict[str, str]:
         """
-        Build memory sections for CA prompt with budget control.
+        Build memory sections for CA prompt.
+
+        v3.3.0: Simplified to recent turns only. Achievement log in MemoDigest
+        now serves as persistent memory, replacing the 3-layer compression system.
 
         Returns:
-            Dict with keys: long_term, mid_term, recent_turns
+            Dict with key: recent_turns (long_term and mid_term kept for compat)
         """
-        memory_state = self.storage.load_memory_state(session_id)
-
-        total_budget = self._calculate_memory_budget(user_message_length)
-        long_term_budget, short_term_budget, mid_term_budget = self._allocate_budgets(
-            total_budget
-        )
-
-        long_term = self._truncate(memory_state.long_term_summary, long_term_budget)
-        mid_term = self._format_mid_term(
-            memory_state.mid_term_summaries, mid_term_budget
-        )
-
         recent_turns = self.storage.load_recent_turns(
             session_id,
             settings.memory_recent_turns,
@@ -55,13 +46,14 @@ class MemoryManager:
         recent_text = self._format_recent_turns(
             recent_turns,
             settings.memory_recent_turn_chars,
-            short_term_budget,
+            settings.memory_short_term_budget_chars,
         )
 
         return {
-            "long_term": long_term or "(none)",
-            "mid_term": mid_term or "(none)",
             "recent_turns": recent_text or "(none)",
+            # Keep for backward compatibility but no longer used in prompts
+            "long_term": "(deprecated - see achievement_log in MemoDigest)",
+            "mid_term": "(deprecated - see achievement_log in MemoDigest)",
         }
 
     async def update_after_turn(
@@ -72,7 +64,13 @@ class MemoryManager:
         companion_response: str,
         turn_outcome: TurnOutcome,
     ) -> None:
-        """Update memory after a turn is saved."""
+        """
+        Update memory after a turn is saved.
+
+        v3.3.0: Simplified - no longer uses LLM for long-term/mid-term summarization.
+        Achievement log in MemoDigest now serves as persistent memory.
+        Only updates the last_updated_turn marker.
+        """
         try:
             memory_state = self.storage.load_memory_state(session_id)
         except Exception as e:
@@ -82,22 +80,7 @@ class MemoryManager:
         if memory_state.last_updated_turn >= turn_index:
             return
 
-        updated_summary = await self._update_long_term_summary(
-            memory_state.long_term_summary,
-            user_message,
-            companion_response,
-            turn_outcome,
-        )
-        if updated_summary is not None:
-            memory_state.long_term_summary = updated_summary
-
         memory_state.last_updated_turn = turn_index
-
-        await self._maybe_summarize_mid_term(
-            session_id=session_id,
-            memory_state=memory_state,
-            current_turn_index=turn_index,
-        )
 
         try:
             self.storage.save_memory_state(session_id, memory_state)
@@ -105,11 +88,7 @@ class MemoryManager:
             logger.warning(f"Failed to save memory state: {e}")
 
     def _calculate_memory_budget(self, user_message_length: int) -> int:
-        remaining = (
-            settings.max_context_chars
-            - settings.memory_reserved_chars
-            - user_message_length
-        )
+        remaining = settings.max_context_chars - settings.memory_reserved_chars - user_message_length
         remaining = max(0, remaining)
         return min(settings.memory_total_budget_chars, remaining)
 
@@ -148,9 +127,7 @@ class MemoryManager:
         parts: List[str] = []
         for turn in turns:
             user_text = self._truncate(turn.get("user_message", ""), per_turn_chars)
-            assistant_text = self._truncate(
-                turn.get("companion_response", ""), per_turn_chars
-            )
+            assistant_text = self._truncate(turn.get("companion_response", ""), per_turn_chars)
             parts.append(
                 f"[Turn {turn.get('turn_index')}]\n"
                 f"User: {user_text}\n"
@@ -196,9 +173,9 @@ class MemoryManager:
         )
 
         try:
-            response, _ = await self.llm_client.generate(
+            response = await self.llm_client.generate(
                 prompt,
-                # temperature=0.2,
+                temperature=0.2,
                 max_tokens=512,
             )
         except LLMError as e:
@@ -251,9 +228,7 @@ class MemoryManager:
         memory_state.last_mid_term_turn = end_turn
 
         if len(memory_state.mid_term_summaries) > settings.memory_mid_term_max_chunks:
-            memory_state.mid_term_summaries = memory_state.mid_term_summaries[
-                -settings.memory_mid_term_max_chunks :
-            ]
+            memory_state.mid_term_summaries = memory_state.mid_term_summaries[-settings.memory_mid_term_max_chunks :]
 
     async def _summarize_turn_chunk(self, turns: List[Dict]) -> Optional[str]:
         turns_text = self._format_recent_turns(
@@ -276,9 +251,9 @@ class MemoryManager:
         )
 
         try:
-            response, _ = await self.llm_client.generate(
+            response = await self.llm_client.generate(
                 prompt,
-                # temperature=0.2,
+                temperature=0.2,
                 max_tokens=512,
             )
         except LLMError as e:

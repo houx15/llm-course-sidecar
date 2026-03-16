@@ -2,7 +2,6 @@
 
 import json
 import logging
-import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -30,8 +29,6 @@ class StorageError(Exception):
 class Storage:
     """File-based storage manager for session data."""
 
-    WORKSPACE_ALLOWED_EXTENSIONS = {".py", ".ipynb", ".txt", ".md"}
-
     def __init__(self, base_dir: str = "sessions"):
         """
         Initialize storage manager.
@@ -49,18 +46,6 @@ class Storage:
     def _get_turns_dir(self, session_id: str) -> Path:
         """Get turns directory path."""
         return self._get_session_dir(session_id) / "turns"
-
-    def _get_workspace_dir(self, session_id: str) -> Path:
-        """Get user workspace directory path."""
-        return self._get_session_dir(session_id) / "user_workspace"
-
-    def _get_code_history_dir(self, session_id: str) -> Path:
-        """Get code history directory path."""
-        return self._get_session_dir(session_id) / "code_history"
-
-    def _get_workspace_sources_path(self, session_id: str) -> Path:
-        """Get workspace file source metadata path."""
-        return self._get_session_dir(session_id) / "workspace_sources.json"
 
     def _atomic_write_json(self, file_path: Path, data: Dict) -> None:
         """
@@ -150,8 +135,6 @@ class Storage:
         # v3.0: Create expert system directories
         (session_dir / "working_files").mkdir(exist_ok=True)
         (session_dir / "working_files" / "expert_logs").mkdir(exist_ok=True)
-        (session_dir / "user_workspace").mkdir(exist_ok=True)
-        (session_dir / "code_history").mkdir(exist_ok=True)
         (session_dir / "expert_workspace").mkdir(exist_ok=True)
         (session_dir / "expert_workspace" / "consultations").mkdir(exist_ok=True)
         (session_dir / "expert_reports").mkdir(exist_ok=True)
@@ -159,7 +142,6 @@ class Storage:
         # v3.0: Initialize expert_reports/index.json
         expert_reports_index = {"reports": []}
         self._write_json(session_dir / "expert_reports" / "index.json", expert_reports_index)
-        self._write_json(self._get_workspace_sources_path(session_id), {"sources": {}})
 
         # Save initial state
         self.save_state(session_id, initial_state)
@@ -210,31 +192,41 @@ class Storage:
 
     def load_instruction_packet(self, session_id: str) -> InstructionPacket:
         """
-        Load instruction packet with soft migration for v1.2 sessions.
+        Load instruction packet with soft migration for v1.2/v3.0 sessions.
 
-        Converts old 'what_to_check' string to new 'must_check' array format.
+        Converts old 'what_to_check' or 'must_check' formats to new 'recommended_targets' format.
         """
         file_path = self._get_session_dir(session_id) / "instruction_packet.json"
         data = self._read_json(file_path)
 
-        # Soft migration: convert v1.2 format to v2.0
-        if "what_to_check" in data and "must_check" not in data:
-            logger.info(f"Migrating instruction packet for session {session_id} from v1.2 to v2.0")
+        # Soft migration: convert v1.2/v3.0 format to v3.1+
+        migrated = False
+        checks = []
 
+        if "what_to_check" in data and "recommended_targets" not in data:
+            logger.info(f"Migrating instruction packet for session {session_id} from v1.2 to v3.1+")
             # Convert old string to array (split by newline or comma)
             old_check = data.pop("what_to_check")
             checks = [c.strip() for c in old_check.replace("\n", ",").split(",") if c.strip()]
+            migrated = True
 
-            # Take first 2 as must_check
-            data["must_check"] = checks[:2] if checks else ["验证学生理解当前任务"]
-            data["nice_check"] = checks[2:3] if len(checks) > 2 else []
+        elif "recommended_targets" in data and "recommended_targets" not in data:
+            logger.info(f"Migrating instruction packet for session {session_id} from v3.0 to v3.1+")
+            checks = data.pop("recommended_targets")
+            migrated = True
 
-            # Add new required fields with defaults
-            data["instruction_version"] = 1
-            data["lock_until"] = "checkpoint_reached"
-            data["allow_setup_helper_code"] = False
-            data["setup_helper_scope"] = "none"
-            data["task_type"] = "core"
+        if migrated:
+            # Take first 2 as recommended_targets
+            data["recommended_targets"] = checks[:2] if checks else ["验证学生理解当前任务"]
+            if "nice_check" not in data:
+                data["nice_check"] = checks[2:3] if len(checks) > 2 else []
+
+            # Add new required fields with defaults if not present
+            data.setdefault("instruction_version", 1)
+            data.setdefault("lock_until", "checkpoint_reached")
+            data.setdefault("allow_setup_helper_code", False)
+            data.setdefault("setup_helper_scope", "none")
+            data.setdefault("task_type", "core")
 
         return InstructionPacket(**data)
 
@@ -258,7 +250,6 @@ class Storage:
         user_message: str,
         companion_response: str,
         turn_outcome: Dict,
-        token_usage: Dict | None = None,
     ) -> None:
         """
         Save turn history files.
@@ -269,7 +260,6 @@ class Storage:
             user_message: User's message
             companion_response: Companion's response
             turn_outcome: Turn outcome data
-            token_usage: Optional token usage data (input/output totals per agent)
         """
         turns_dir = self._get_turns_dir(session_id)
 
@@ -289,11 +279,6 @@ class Storage:
         # Save turn outcome
         outcome_file = turns_dir / f"{turn_str}_turn_outcome.json"
         self._write_json(outcome_file, turn_outcome)
-
-        # Save token usage if provided
-        if token_usage:
-            usage_file = turns_dir / f"{turn_str}_token_usage.json"
-            self._write_json(usage_file, token_usage)
 
     def load_turn_history(self, session_id: str) -> List[Dict]:
         """
@@ -325,20 +310,12 @@ class Storage:
 
             turn_outcome = self._read_json(outcome_file)
 
-            # Load token usage if available
-            usage_file = turns_dir / f"{turn_str}_token_usage.json"
-            token_usage = self._read_json(usage_file) if usage_file.exists() else None
-
-            entry = {
+            history.append({
                 "turn_index": int(turn_str),
                 "user_message": user_message,
                 "companion_response": companion_response,
                 "turn_outcome": turn_outcome,
-            }
-            if token_usage:
-                entry["token_usage"] = token_usage
-
-            history.append(entry)
+            })
 
         return history
 
@@ -646,168 +623,16 @@ class Storage:
         if not (session_dir / "working_files").exists():
             logger.warning(f"Session {session_id} missing v3.0 directories, creating them now")
 
-        (session_dir / "working_files").mkdir(exist_ok=True)
-        (session_dir / "working_files" / "expert_logs").mkdir(exist_ok=True)
-        (session_dir / "user_workspace").mkdir(exist_ok=True)
-        (session_dir / "code_history").mkdir(exist_ok=True)
-        (session_dir / "expert_workspace").mkdir(exist_ok=True)
-        (session_dir / "expert_workspace" / "consultations").mkdir(exist_ok=True)
-        (session_dir / "expert_reports").mkdir(exist_ok=True)
+            (session_dir / "working_files").mkdir(exist_ok=True)
+            (session_dir / "working_files" / "expert_logs").mkdir(exist_ok=True)
+            (session_dir / "expert_workspace").mkdir(exist_ok=True)
+            (session_dir / "expert_workspace" / "consultations").mkdir(exist_ok=True)
+            (session_dir / "expert_reports").mkdir(exist_ok=True)
 
-        # Initialize expert_reports/index.json if missing
-        index_path = session_dir / "expert_reports" / "index.json"
-        if not index_path.exists():
-            self._write_json(index_path, {"reports": []})
-
-        workspace_sources_path = self._get_workspace_sources_path(session_id)
-        if not workspace_sources_path.exists():
-            self._write_json(workspace_sources_path, {"sources": {}})
-
-    def _validate_workspace_filename(self, filename: str) -> str:
-        """Validate workspace filename and return normalized value."""
-        normalized = str(filename or "").strip()
-        if not normalized:
-            raise StorageError("Filename is required")
-        if normalized != Path(normalized).name:
-            raise StorageError(f"Invalid filename: {filename}")
-        if "/" in normalized or "\\" in normalized or ".." in normalized:
-            raise StorageError(f"Invalid filename: {filename}")
-        return normalized
-
-    def _validate_workspace_extension(self, filename: str) -> None:
-        """Validate workspace filename extension."""
-        suffix = Path(filename).suffix.lower()
-        if suffix not in self.WORKSPACE_ALLOWED_EXTENSIONS:
-            allowed = ", ".join(sorted(self.WORKSPACE_ALLOWED_EXTENSIONS))
-            raise StorageError(f"Unsupported workspace file extension: {suffix}. Allowed: {allowed}")
-
-    def _resolve_workspace_file_path(self, session_id: str, filename: str) -> Path:
-        """Resolve and validate workspace file path."""
-        self._ensure_v3_directories(session_id)
-        safe_filename = self._validate_workspace_filename(filename)
-        workspace_dir = self._get_workspace_dir(session_id).resolve()
-        file_path = (workspace_dir / safe_filename).resolve()
-
-        try:
-            file_path.relative_to(workspace_dir)
-        except ValueError as exc:
-            raise StorageError(f"Path traversal detected: {filename}") from exc
-
-        return file_path
-
-    def _load_workspace_sources(self, session_id: str) -> Dict[str, str]:
-        """Load workspace source metadata map."""
-        sources_path = self._get_workspace_sources_path(session_id)
-        if not sources_path.exists():
-            return {}
-
-        payload = self._read_json(sources_path)
-        sources = payload.get("sources", {})
-        if isinstance(sources, dict):
-            return {str(k): str(v) for k, v in sources.items()}
-        return {}
-
-    def _save_workspace_sources(self, session_id: str, sources: Dict[str, str]) -> None:
-        """Persist workspace source metadata map."""
-        self._write_json(self._get_workspace_sources_path(session_id), {"sources": sources})
-
-    def set_workspace_file_source(self, session_id: str, filename: str, source: str) -> None:
-        """Set source metadata for a workspace file."""
-        safe_filename = self._validate_workspace_filename(filename)
-        source_value = source if source in {"bundle", "user"} else "user"
-        sources = self._load_workspace_sources(session_id)
-        sources[safe_filename] = source_value
-        self._save_workspace_sources(session_id, sources)
-
-    def list_workspace_files(self, session_id: str) -> List[Dict]:
-        """List files in user_workspace directory."""
-        self._ensure_v3_directories(session_id)
-        workspace_dir = self._get_workspace_dir(session_id)
-        source_map = self._load_workspace_sources(session_id)
-
-        files = []
-        for item in workspace_dir.iterdir():
-            if not item.is_file():
-                continue
-            if item.suffix.lower() not in self.WORKSPACE_ALLOWED_EXTENSIONS:
-                continue
-            stat = item.stat()
-            files.append({
-                "name": item.name,
-                "size_bytes": stat.st_size,
-                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                "source": source_map.get(item.name, "user"),
-            })
-
-        files.sort(key=lambda x: x["name"])
-        return files
-
-    def read_workspace_file(self, session_id: str, filename: str) -> str:
-        """Read a file from user_workspace. Raises FileNotFoundError."""
-        self._validate_workspace_extension(filename)
-        file_path = self._resolve_workspace_file_path(session_id, filename)
-        if not file_path.exists() or not file_path.is_file():
-            raise FileNotFoundError(filename)
-        return file_path.read_text(encoding="utf-8")
-
-    def write_workspace_file(self, session_id: str, filename: str, content: str) -> Dict:
-        """Write content to a file in user_workspace and return file metadata."""
-        self._validate_workspace_extension(filename)
-        file_path = self._resolve_workspace_file_path(session_id, filename)
-        file_path.write_text(content, encoding="utf-8")
-        self.set_workspace_file_source(session_id, file_path.name, "user")
-        stat = file_path.stat()
-        return {
-            "name": file_path.name,
-            "size_bytes": stat.st_size,
-            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            "source": "user",
-        }
-
-    def delete_workspace_file(self, session_id: str, filename: str) -> None:
-        """Delete a file from user_workspace."""
-        self._validate_workspace_extension(filename)
-        file_path = self._resolve_workspace_file_path(session_id, filename)
-        if not file_path.exists() or not file_path.is_file():
-            raise FileNotFoundError(filename)
-        file_path.unlink()
-
-        sources = self._load_workspace_sources(session_id)
-        sources.pop(file_path.name, None)
-        self._save_workspace_sources(session_id, sources)
-
-    def get_recent_code_executions(self, session_id: str, limit: int = 3) -> List[Dict]:
-        """Return the last N code execution records (most recent first)."""
-        self._ensure_v3_directories(session_id)
-        if limit <= 0:
-            return []
-
-        history_dir = self._get_code_history_dir(session_id)
-        results: List[Dict[str, Any]] = []
-        for history_file in sorted(history_dir.glob("run_*.json"), reverse=True):
-            try:
-                payload = self._read_json(history_file)
-                timestamp = float(payload.get("timestamp", history_file.stat().st_mtime))
-                if not math.isfinite(timestamp):
-                    raise ValueError("timestamp is not finite")
-                exit_code = int(payload.get("exit_code", payload.get("returncode", 0)))
-            except Exception as exc:
-                logger.warning(f"Failed reading code history file {history_file}: {exc}")
-                continue
-
-            results.append(
-                {
-                    "code": payload.get("code", ""),
-                    "stdout": payload.get("stdout", ""),
-                    "stderr": payload.get("stderr", ""),
-                    "exit_code": exit_code,
-                    "timestamp": timestamp,
-                }
-            )
-            if len(results) >= limit:
-                break
-
-        return results
+            # Initialize expert_reports/index.json if missing
+            index_path = session_dir / "expert_reports" / "index.json"
+            if not index_path.exists():
+                self._write_json(index_path, {"reports": []})
 
     def save_consultation_meta(self, session_id: str, consultation_id: str, meta: Dict) -> None:
         """Save consultation metadata.
@@ -1022,11 +847,6 @@ class Storage:
         """
         self._ensure_v3_directories(session_id)
         return self._get_session_dir(session_id) / "working_files"
-
-    def get_workspace_path(self, session_id: str) -> Path:
-        """Get path to user_workspace directory."""
-        self._ensure_v3_directories(session_id)
-        return self._get_workspace_dir(session_id)
 
     def list_working_files(self, session_id: str) -> List[str]:
         """List all files in working_files directory (excluding expert_logs).
