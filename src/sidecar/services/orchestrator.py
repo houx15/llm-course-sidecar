@@ -22,6 +22,7 @@ from ..models.schemas import (
     SubtaskStatus,
     InstructionPacket,
     ConsultationContext,
+    SkipLogEntry,
 )
 from ..config import settings
 
@@ -598,6 +599,136 @@ class Orchestrator:
 
         return subtasks
 
+    async def execute_skip(
+        self,
+        session_id: str,
+        subtask_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        reason_text: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Execute a task skip for the given session.
+
+        Args:
+            session_id: Session identifier
+            subtask_id: Optional specific task to skip; defaults to current_subtask_id or first active task
+            reason: Reason code for skipping (e.g., '已掌握', '太难了')
+            reason_text: Free-form text reason (required when reason is '其他')
+
+        Returns:
+            Dict with keys: skipped_task_id, next_task_id, needs_reason, consecutive_skips,
+                            all_tasks_done, subtask_status
+        """
+        from datetime import datetime, timezone
+
+        state = self.storage.load_state(session_id)
+
+        # Resolve target task
+        target_id = subtask_id or state.current_subtask_id
+
+        if not target_id:
+            # Find first active (not completed, not skipped) task
+            for tid, tstatus in state.subtask_status.items():
+                if tstatus.status not in ("completed", "skipped"):
+                    target_id = tid
+                    break
+
+        if not target_id:
+            return {
+                "skipped_task_id": None,
+                "next_task_id": None,
+                "needs_reason": False,
+                "consecutive_skips": state.consecutive_skips,
+                "all_tasks_done": True,
+                "subtask_status": {k: v.model_dump() for k, v in state.subtask_status.items()},
+            }
+
+        # Validate task exists
+        if target_id not in state.subtask_status:
+            raise OrchestratorError(f"Task not found: {target_id}")
+
+        # Validate task is not already completed/skipped
+        current_status = state.subtask_status[target_id].status
+        if current_status in ("completed", "skipped"):
+            raise OrchestratorError(
+                f"Task '{target_id}' is already {current_status} and cannot be skipped"
+            )
+
+        # If no reason and consecutive_skips >= 2, request reason before proceeding
+        if reason is None and state.consecutive_skips >= 2:
+            state.awaiting_skip_reason = True
+            self.storage.save_state(session_id, state)
+            return {
+                "skipped_task_id": target_id,
+                "next_task_id": None,
+                "needs_reason": True,
+                "consecutive_skips": state.consecutive_skips,
+                "all_tasks_done": False,
+                "subtask_status": {k: v.model_dump() for k, v in state.subtask_status.items()},
+            }
+
+        # Execute the skip
+        state.subtask_status[target_id].status = "skipped"
+        state.awaiting_skip_reason = False
+
+        # Record in skip_log
+        skip_entry = SkipLogEntry(
+            subtask_id=target_id,
+            turn_index=state.turn_index,
+            reason=reason,
+            reason_text=reason_text,
+            skipped_at=datetime.now(timezone.utc).isoformat(),
+        )
+        state.skip_log.append(skip_entry)
+
+        # Update consecutive_skips
+        state.consecutive_skips += 1
+
+        # Find next active task
+        task_ids = list(state.subtask_status.keys())
+        next_task_id: Optional[str] = None
+        try:
+            current_index = task_ids.index(target_id)
+            for i in range(current_index + 1, len(task_ids)):
+                candidate = task_ids[i]
+                if state.subtask_status[candidate].status not in ("completed", "skipped"):
+                    next_task_id = candidate
+                    break
+        except ValueError:
+            pass
+
+        # If no next task found, look from the beginning (wrap around to any remaining active)
+        if next_task_id is None:
+            for tid in task_ids:
+                if state.subtask_status[tid].status not in ("completed", "skipped"):
+                    next_task_id = tid
+                    break
+
+        # Update current_subtask_id
+        state.current_subtask_id = next_task_id
+
+        # Check if all tasks done
+        all_tasks_done = all(
+            s.status in ("completed", "skipped")
+            for s in state.subtask_status.values()
+        )
+
+        self.storage.save_state(session_id, state)
+
+        logger.info(
+            f"Task skipped: {target_id} (reason={reason}), next={next_task_id}, "
+            f"consecutive_skips={state.consecutive_skips}"
+        )
+
+        return {
+            "skipped_task_id": target_id,
+            "next_task_id": next_task_id,
+            "needs_reason": False,
+            "consecutive_skips": state.consecutive_skips,
+            "all_tasks_done": all_tasks_done,
+            "subtask_status": {k: v.model_dump() for k, v in state.subtask_status.items()},
+        }
+
     def _should_unlock_instruction_packet(
         self,
         state: SessionState,
@@ -687,6 +818,9 @@ class Orchestrator:
             # Parse task list to get subtasks
             subtasks = self._parse_task_list(chapter_content.get("task_list", ""))
 
+            # Set initial current_subtask_id to the first task
+            first_task_id = next(iter(subtasks), None)
+
             initial_state = SessionState(
                 session_id=session_id,
                 chapter_id=chapter_id,
@@ -702,6 +836,7 @@ class Orchestrator:
                 current_instruction_version=1,
                 attempts_since_last_progress=0,
                 last_progress_turn=0,
+                current_subtask_id=first_task_id,
             )
 
             self.storage.create_session(session_id, chapter_id, initial_state)
@@ -946,6 +1081,38 @@ class Orchestrator:
                 from .json_utils import get_default_memo_digest
                 previous_memo_digest = get_default_memo_digest()
 
+            # 3.5: Handle skip_requested signal from CA
+            if getattr(turn_outcome, "skip_requested", False):
+                skip_reason_from_ca = getattr(turn_outcome, "skip_reason", None)
+                if state.awaiting_skip_reason and skip_reason_from_ca:
+                    # Student provided a reason after being asked
+                    try:
+                        await self.execute_skip(
+                            session_id=session_id,
+                            reason=skip_reason_from_ca,
+                        )
+                        # Reload state after skip
+                        state = self.storage.load_state(session_id)
+                    except OrchestratorError as e:
+                        logger.warning(f"Skip with reason failed: {e}")
+                elif state.consecutive_skips >= 2:
+                    # Mark that we need a reason but don't skip yet
+                    state.awaiting_skip_reason = True
+                    self.storage.save_state(session_id, state)
+                    logger.info("Skip requested but reason required (consecutive_skips >= 2)")
+                else:
+                    # Execute skip directly (< 3 consecutive skips, no reason needed)
+                    try:
+                        await self.execute_skip(session_id=session_id)
+                        # Reload state after skip
+                        state = self.storage.load_state(session_id)
+                    except OrchestratorError as e:
+                        logger.warning(f"Direct skip failed: {e}")
+            elif state.awaiting_skip_reason and not getattr(turn_outcome, "skip_requested", False):
+                # Student didn't skip this turn — reset the awaiting flag
+                state.awaiting_skip_reason = False
+                self.storage.save_state(session_id, state)
+
             # 4. Determine if instruction packet should be updated (current turn)
             should_unlock, unlock_reason = self._should_unlock_instruction_packet(
                 state=state,
@@ -1033,6 +1200,14 @@ class Orchestrator:
                     # Update state with RMA's state update
                     state.update(rma_result.state_update)
                     state.current_instruction_version = new_instruction.instruction_version
+
+                    # Try to update current_subtask_id by matching task IDs in current_focus
+                    current_focus = new_instruction.current_focus or ""
+                    for task_id in state.subtask_status:
+                        if task_id in current_focus:
+                            if state.subtask_status[task_id].status not in ("completed", "skipped"):
+                                state.current_subtask_id = task_id
+                                break
 
                     # v3.1: Handle RMA's consultation request (if any)
                     if rma_result.consultation_request and self.consultation_engine:
@@ -1197,6 +1372,7 @@ class Orchestrator:
                 if turn_outcome.checkpoint_reached:
                     state.attempts_since_last_progress = 0
                     state.last_progress_turn = state.turn_index
+                    state.consecutive_skips = 0
                 else:
                     state.attempts_since_last_progress = 0
             else:
@@ -1204,6 +1380,8 @@ class Orchestrator:
                 if turn_outcome.checkpoint_reached or memo_result.digest.progress_delta == "evidence_added":
                     state.attempts_since_last_progress = 0
                     state.last_progress_turn = state.turn_index
+                    if turn_outcome.checkpoint_reached:
+                        state.consecutive_skips = 0
                 else:
                     state.attempts_since_last_progress += 1
 
