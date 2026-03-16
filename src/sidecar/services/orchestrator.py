@@ -952,53 +952,12 @@ class Orchestrator:
                 initial_state.update(rma_result.state_update)
                 self.storage.save_state(session_id, initial_state)
 
-            # Step 4: Call CA for first message (greeting + task overview)
-            logger.info("Calling CA for initial greeting")
-            initial_user_message = "[系统：这是会话的开始，请向学习者打招呼并介绍任务]"
-            memory_sections = self.memory_manager.build_memory_sections(
-                session_id=session_id,
-                user_message_length=len(initial_user_message),
-            )
-
-            ca_response, turn_outcome, _ = await self.agent_runner.run_companion(
-                user_message=initial_user_message,
-                instruction_packet=rma_result.instruction_packet,
-                dynamic_report="",
-                session_state=initial_state,
-                chapter_context=chapter_content.get("chapter_context", ""),
-                task_list=chapter_content.get("task_list", ""),
-                task_completion_principles=chapter_content.get("task_completion_principles", ""),
-                interaction_protocol=chapter_content.get("interaction_protocol", ""),
-                socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-                memory_long_term=memory_sections["long_term"],
-                memory_mid_term=memory_sections["mid_term"],
-                memory_recent_turns=memory_sections["recent_turns"],
-            )
-
-            # Save initial turn
-            self.storage.save_turn(
-                session_id,
-                0,
-                initial_user_message,
-                ca_response,
-                turn_outcome.model_dump()
-            )
-
-            # Increment turn index and save state immediately (don't wait for MA)
-            initial_state.turn_index = 1
-            self.storage.save_state(session_id, initial_state)
-
-            # Step 5: Fire-and-forget MA in background — don't block session creation
-            logger.info("Launching MA in background to initialize reports")
-            import asyncio
-            asyncio.create_task(self._run_initial_memo_background(
-                session_id=session_id,
-                initial_user_message=initial_user_message,
-                ca_response=ca_response,
-                turn_outcome=turn_outcome,
-                initial_state=initial_state,
-                templates=templates,
-            ))
+            # CA greeting and MA report init will happen when the desktop
+            # sends the first message through the stream endpoint.
+            # This keeps session creation fast (~7s for RMA only).
+            from .json_utils import get_default_memo_digest
+            self.storage.save_memo_digest(session_id, get_default_memo_digest())
+            self.storage.save_dynamic_report(session_id, "")
 
             logger.info(f"Session created successfully: {session_id}")
             return session_id
@@ -1006,42 +965,6 @@ class Orchestrator:
         except Exception as e:
             logger.error(f"Failed to create session: {e}")
             raise OrchestratorError(f"Failed to create session: {e}")
-
-    async def _run_initial_memo_background(
-        self,
-        session_id: str,
-        initial_user_message: str,
-        ca_response: str,
-        turn_outcome,
-        initial_state,
-        templates: dict,
-    ) -> None:
-        """Run MA in background during session creation. Don't block the user."""
-        try:
-            memo_result, _ = await self.agent_runner.run_memo(
-                user_message=initial_user_message,
-                companion_response=ca_response,
-                turn_outcome=turn_outcome,
-                current_report="",
-                session_state=initial_state,
-                dynamic_report_template=templates.get("dynamic_report_template", ""),
-                student_error_summary_template=templates.get("student_error_summary_template", ""),
-                final_learning_report_template=templates.get("final_learning_report_template", ""),
-            )
-
-            self.storage.save_dynamic_report(session_id, memo_result.updated_report)
-            self.storage.save_memo_digest(session_id, memo_result.digest)
-
-            await self.memory_manager.update_after_turn(
-                session_id=session_id,
-                turn_index=0,
-                user_message=initial_user_message,
-                companion_response=ca_response,
-                turn_outcome=turn_outcome,
-            )
-            logger.info(f"MA background init complete for session {session_id}")
-        except Exception as e:
-            logger.warning(f"MA background init failed for session {session_id}: {e}")
 
     async def process_turn(self, session_id: str, user_message: str) -> str:
         """
