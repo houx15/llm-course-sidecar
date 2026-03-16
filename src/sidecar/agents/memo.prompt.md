@@ -145,6 +145,11 @@
   - 绘制 GovTrack 风格趋势图（plot_misconduct_trends）
   ```
 
+#### 4. ⏭️ 跳过的任务
+当有任务被跳过时（subtask_status 中 status="skipped"），添加此段落：
+- 格式：`- task_id: [跳过原因，如有] (第X轮跳过)`
+- 如果没有跳过的任务，不要添加此段落
+
 **重要说明**：
 - "当前进行"和"未来任务"都是task_list.md中定义的主任务条目
 - "我的进展"是当前主任务的细化，反映学习者的实时进展
@@ -302,6 +307,10 @@
 **checkpoint_reached（达到检查点）**：
 - 学习者满足了当前任务的完成标准
 - 可以进入下一个任务
+
+### 跳过的任务追踪
+
+- `skipped_tasks`: 列出所有已跳过的任务ID。从 subtask_status 中提取 status="skipped" 的任务。
 
 **regressed（退步）**：
 - 学习者的理解出现倒退

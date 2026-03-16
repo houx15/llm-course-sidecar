@@ -385,6 +385,17 @@
 - 可选任务不是必需的
 - 不要过早建议结束
 
+### 8. 处理跳过的任务
+
+当 subtask_status 中有任务状态为 `skipped` 时：
+
+1. **跳过已跳过的任务**: 在生成 instruction_packet 时，`current_focus` 应指向下一个未完成且未跳过的任务
+2. **state_update**: 不要将 skipped 的任务改回其他状态
+3. **跳过后的引导**: `guidance_for_ca` 应包含对新任务的引导，无需提及被跳过的任务
+4. **所有任务完成或跳过**: 如果所有任务都已完成或跳过，设置 `end_suggested: true`
+
+在 state_update 中，跳过的任务保持 `skipped` 状态，不要覆盖。
+
 ## 示例
 
 ### 示例 1：任务进行中
