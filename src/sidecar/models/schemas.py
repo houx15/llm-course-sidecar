@@ -128,6 +128,11 @@ class TurnOutcome(BaseModel):
         default="",
         description="Objective excerpt of student's substantive output this turn: new ideas, designs, code, answers. Empty string if no progress."
     )
+
+    @field_validator("progress_record", mode="before")
+    @classmethod
+    def _coerce_progress_record(cls, v):
+        return v if v is not None else ""
     what_user_attempted: str
     what_user_observed: str = ""
     ca_teaching_mode: Literal["socratic", "direct"]
