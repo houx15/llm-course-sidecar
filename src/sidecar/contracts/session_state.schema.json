@@ -35,7 +35,7 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["not_started", "in_progress", "completed"],
+            "enum": ["not_started", "in_progress", "completed", "skipped"],
             "description": "Current status of the subtask"
           },
           "evidence": {
@@ -91,6 +91,50 @@
       "type": "integer",
       "minimum": 0,
       "description": "Turn index when last progress was made (v2.0 field)"
+    },
+    "current_subtask_id": {
+      "type": ["string", "null"],
+      "description": "ID of the current active subtask being worked on"
+    },
+    "consecutive_skips": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of consecutive task skips without a completion"
+    },
+    "skip_log": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["subtask_id", "turn_index", "skipped_at"],
+        "properties": {
+          "subtask_id": {
+            "type": "string",
+            "description": "ID of the skipped subtask"
+          },
+          "turn_index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Turn index when the skip occurred"
+          },
+          "reason": {
+            "type": ["string", "null"],
+            "description": "Reason code for skip (e.g., '已掌握', '太难了')"
+          },
+          "reason_text": {
+            "type": ["string", "null"],
+            "description": "Free-form reason text (for '其他' reason)"
+          },
+          "skipped_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp when the skip occurred"
+          }
+        }
+      },
+      "description": "Log of all task skips in this session"
+    },
+    "awaiting_skip_reason": {
+      "type": "boolean",
+      "description": "Whether the system is waiting for the student to provide a skip reason"
     }
   }
 }

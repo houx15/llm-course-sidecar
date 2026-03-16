@@ -54,6 +54,13 @@
         "type": "string"
       },
       "description": "Internal diagnostic notes (not shown to student, not fed to CA by default)"
+    },
+    "skipped_tasks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of task IDs that were skipped in this session"
     }
   }
 }

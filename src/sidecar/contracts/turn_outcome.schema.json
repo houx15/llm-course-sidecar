@@ -61,6 +61,14 @@
         }
       },
       "description": "Evidence collected for specific subtasks this turn"
+    },
+    "skip_requested": {
+      "type": "boolean",
+      "description": "Whether the student requested to skip the current task"
+    },
+    "skip_reason": {
+      "type": ["string", "null"],
+      "description": "Reason for skipping the task (e.g., '已掌握', '太难了')"
     }
   }
 }
