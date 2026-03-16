@@ -984,8 +984,40 @@ class Orchestrator:
                 turn_outcome.model_dump()
             )
 
-            # Step 5: Call MA to initialize reports
-            logger.info("Calling MA to initialize reports")
+            # Increment turn index and save state immediately (don't wait for MA)
+            initial_state.turn_index = 1
+            self.storage.save_state(session_id, initial_state)
+
+            # Step 5: Fire-and-forget MA in background — don't block session creation
+            logger.info("Launching MA in background to initialize reports")
+            import asyncio
+            asyncio.create_task(self._run_initial_memo_background(
+                session_id=session_id,
+                initial_user_message=initial_user_message,
+                ca_response=ca_response,
+                turn_outcome=turn_outcome,
+                initial_state=initial_state,
+                templates=templates,
+            ))
+
+            logger.info(f"Session created successfully: {session_id}")
+            return session_id
+
+        except Exception as e:
+            logger.error(f"Failed to create session: {e}")
+            raise OrchestratorError(f"Failed to create session: {e}")
+
+    async def _run_initial_memo_background(
+        self,
+        session_id: str,
+        initial_user_message: str,
+        ca_response: str,
+        turn_outcome,
+        initial_state,
+        templates: dict,
+    ) -> None:
+        """Run MA in background during session creation. Don't block the user."""
+        try:
             memo_result, _ = await self.agent_runner.run_memo(
                 user_message=initial_user_message,
                 companion_response=ca_response,
@@ -1007,17 +1039,9 @@ class Orchestrator:
                 companion_response=ca_response,
                 turn_outcome=turn_outcome,
             )
-
-            # Increment turn index
-            initial_state.turn_index = 1
-            self.storage.save_state(session_id, initial_state)
-
-            logger.info(f"Session created successfully: {session_id}")
-            return session_id
-
+            logger.info(f"MA background init complete for session {session_id}")
         except Exception as e:
-            logger.error(f"Failed to create session: {e}")
-            raise OrchestratorError(f"Failed to create session: {e}")
+            logger.warning(f"MA background init failed for session {session_id}: {e}")
 
     async def process_turn(self, session_id: str, user_message: str) -> str:
         """
