@@ -120,7 +120,7 @@ class SubtaskEvidence(BaseModel):
 class TurnOutcome(BaseModel):
     """Structured outcome of a single turn from Companion Agent."""
     what_user_attempted: str
-    what_user_observed: str
+    what_user_observed: str = ""
     ca_teaching_mode: Literal["socratic", "direct"]
     ca_next_suggestion: str
     checkpoint_reached: bool

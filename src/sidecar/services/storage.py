@@ -316,7 +316,10 @@ class Storage:
             user_file = turns_dir / f"{turn_str}_user.txt"
             companion_file = turns_dir / f"{turn_str}_companion.txt"
 
-            # Read files
+            # Read files (skip if missing — e.g. turn files not yet written)
+            if not user_file.exists() or not companion_file.exists():
+                continue
+
             with open(user_file, "r", encoding="utf-8") as f:
                 user_message = f.read()
 
