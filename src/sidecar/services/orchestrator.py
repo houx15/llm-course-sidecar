@@ -660,10 +660,10 @@ class Orchestrator:
                     f"Task '{target_id}' is already {current_status} and cannot be skipped"
                 )
 
-            # If no reason and consecutive_skips >= 2, request reason before proceeding
+            # If no reason and consecutive_skips >= 2, request reason before proceeding.
+            # Note: we do NOT set awaiting_skip_reason on state — the desktop modal
+            # handles reason collection. Setting it would cause CA to also ask via text.
             if reason is None and state.consecutive_skips >= 2:
-                state.awaiting_skip_reason = True
-                self.storage.save_state(session_id, state)
                 return {
                     "skipped_task_id": target_id,
                     "next_task_id": None,
@@ -1145,37 +1145,20 @@ class Orchestrator:
                 from .json_utils import get_default_memo_digest
                 previous_memo_digest = get_default_memo_digest()
 
-            # 3.5: Handle student_wants_to_skip signal from CA
+            # 3.5: Handle student_wants_to_skip signal from CA (verbal skip via chat)
+            # Note: Button-based skips go through execute_skip() directly via the
+            # /skip-task endpoint. This handles the case where CA detects skip intent
+            # from the student's chat message.
             if getattr(turn_outcome, "student_wants_to_skip", False):
-                skip_reason_from_ca = getattr(turn_outcome, "skip_reason", None)
-                if state.awaiting_skip_reason and skip_reason_from_ca:
-                    # Student provided a reason after being asked
-                    try:
-                        await self.execute_skip(
-                            session_id=session_id,
-                            reason=skip_reason_from_ca,
-                        )
-                        # Reload state after skip
-                        state = self.storage.load_state(session_id)
-                    except OrchestratorError as e:
-                        logger.warning(f"Skip with reason failed: {e}")
-                elif state.consecutive_skips >= 2:
-                    # Mark that we need a reason but don't skip yet
-                    state.awaiting_skip_reason = True
-                    self.storage.save_state(session_id, state)
-                    logger.info("Skip requested but reason required (consecutive_skips >= 2)")
-                else:
-                    # Execute skip directly (< 3 consecutive skips, no reason needed)
-                    try:
-                        await self.execute_skip(session_id=session_id)
-                        # Reload state after skip
-                        state = self.storage.load_state(session_id)
-                    except OrchestratorError as e:
-                        logger.warning(f"Direct skip failed: {e}")
-            elif state.awaiting_skip_reason and not getattr(turn_outcome, "student_wants_to_skip", False):
-                # Student didn't skip this turn — reset the awaiting flag
-                state.awaiting_skip_reason = False
-                self.storage.save_state(session_id, state)
+                try:
+                    skip_reason_from_ca = getattr(turn_outcome, "skip_reason", None)
+                    await self.execute_skip(
+                        session_id=session_id,
+                        reason=skip_reason_from_ca,
+                    )
+                    state = self.storage.load_state(session_id)
+                except OrchestratorError as e:
+                    logger.warning(f"Skip from CA signal failed: {e}")
 
             # 4. Determine if instruction packet should be updated (current turn)
             should_unlock, unlock_reason = self._should_unlock_instruction_packet(
