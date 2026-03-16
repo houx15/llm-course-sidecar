@@ -181,6 +181,7 @@ class AgentRunner:
         uploaded_files_info: str = "",  # v3.2.0: Uploaded files information
         recent_code_executions: str = "",  # v3.3.0: Recent code execution context
         expert_output_summary: Optional[str] = None,  # v3.2.0: Expert consultation results
+        memo_digest: Optional["MemoDigest"] = None,  # v3.4.1: Access to achievement log
     ) -> Tuple[str, TurnOutcome, Dict[str, int]]:
         """
         Run Companion Agent.
@@ -209,6 +210,7 @@ class AgentRunner:
             "UPLOADED_FILES_INFO": uploaded_files_info,  # v3.2.0
             "RECENT_CODE_EXECUTIONS": recent_code_executions,  # v3.3.0
             "EXPERT_OUTPUT_SUMMARY": expert_output_summary or "",  # v3.2.0
+            "MEMO_DIGEST_JSON": memo_digest.model_dump_json(indent=2) if memo_digest else "{}",  # v3.4.1
         }
         prompt = self._inject_context(template, context)
 
@@ -309,6 +311,7 @@ class AgentRunner:
         available_experts: str = "",
         uploaded_files_info: dict = None,  # v3.2.0: Add uploaded files info
         turn_outcome: Optional[TurnOutcome] = None,
+        instruction_packet: Optional[InstructionPacket] = None,  # v3.3.0: Current instruction packet
     ) -> Tuple[RoadmapManagerResult, Dict[str, int]]:
         """
         Run Roadmap Manager Agent.
@@ -370,6 +373,9 @@ class AgentRunner:
             "TURN_OUTCOME_JSON": (
                 turn_outcome.model_dump_json(indent=2) if turn_outcome else "{}"
             ),
+            "INSTRUCTION_PACKET_JSON": (
+                instruction_packet.model_dump_json(indent=2) if instruction_packet else "{}"
+            ),  # v3.3.0
             "CONSULTATION_GUIDE": consultation_guide if consultation_guide else "(No consultation guide available)",
             "AVAILABLE_EXPERTS": available_experts if available_experts else "(No expert information available)",
             "CONSULT_EXPERT_TOOL_SCHEMA": tool_schema if tool_schema else "(Tool schema not available)",

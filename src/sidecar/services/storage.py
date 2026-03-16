@@ -212,21 +212,21 @@ class Storage:
         """
         Load instruction packet with soft migration for v1.2 sessions.
 
-        Converts old 'what_to_check' string to new 'must_check' array format.
+        Converts old 'what_to_check'/'must_check' to new 'recommended_targets' array format.
         """
         file_path = self._get_session_dir(session_id) / "instruction_packet.json"
         data = self._read_json(file_path)
 
-        # Soft migration: convert v1.2 format to v2.0
-        if "what_to_check" in data and "must_check" not in data:
-            logger.info(f"Migrating instruction packet for session {session_id} from v1.2 to v2.0")
+        # Soft migration: convert v1.2 format (what_to_check) to v3.0 (recommended_targets)
+        if "what_to_check" in data and "recommended_targets" not in data:
+            logger.info(f"Migrating instruction packet for session {session_id} from v1.2 to v3.0")
 
             # Convert old string to array (split by newline or comma)
             old_check = data.pop("what_to_check")
             checks = [c.strip() for c in old_check.replace("\n", ",").split(",") if c.strip()]
 
-            # Take first 2 as must_check
-            data["must_check"] = checks[:2] if checks else ["验证学生理解当前任务"]
+            # Take first 2 as recommended_targets
+            data["recommended_targets"] = checks[:2] if checks else ["验证学生理解当前任务"]
             data["nice_check"] = checks[2:3] if len(checks) > 2 else []
 
             # Add new required fields with defaults
@@ -235,6 +235,10 @@ class Storage:
             data["allow_setup_helper_code"] = False
             data["setup_helper_scope"] = "none"
             data["task_type"] = "core"
+
+        # Soft migration: rename must_check → recommended_targets (v2.0 → v3.0)
+        if "must_check" in data and "recommended_targets" not in data:
+            data["recommended_targets"] = data.pop("must_check")
 
         return InstructionPacket(**data)
 

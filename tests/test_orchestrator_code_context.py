@@ -39,21 +39,25 @@ class CapturingAgentRunner:
                 student_sentiment="engaged",
                 evidence_for_subtasks=[],
             ),
+            {"input_tokens": 0, "output_tokens": 0},
         )
 
     async def run_memo(self, **kwargs):
-        return MemoResult(
-            updated_report=kwargs["current_report"],
-            digest=MemoDigest(
-                key_observations=[],
-                student_struggles=[],
-                student_strengths=[],
-                student_sentiment="engaged",
-                blocker_type="none",
-                progress_delta="none",
-                diagnostic_log=[],
+        return (
+            MemoResult(
+                updated_report=kwargs["current_report"],
+                digest=MemoDigest(
+                    key_observations=[],
+                    student_struggles=[],
+                    student_strengths=[],
+                    student_sentiment="engaged",
+                    blocker_type="none",
+                    progress_delta="none",
+                    diagnostic_log=[],
+                ),
+                error_entries=[],
             ),
-            error_entries=[],
+            {"input_tokens": 0, "output_tokens": 0},
         )
 
 
@@ -71,7 +75,7 @@ def _bootstrap_session(storage: Storage, session_id: str = "sess-1"):
         InstructionPacket(
             current_focus="focus",
             guidance_for_ca="guide",
-            must_check=["check"],
+            recommended_targets=["check"],
             nice_check=[],
             instruction_version=1,
             lock_until="checkpoint_reached",

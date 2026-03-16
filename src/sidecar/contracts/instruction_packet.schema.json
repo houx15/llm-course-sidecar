@@ -6,7 +6,7 @@
   "required": [
     "current_focus",
     "guidance_for_ca",
-    "must_check",
+    "recommended_targets",
     "instruction_version",
     "lock_until",
     "allow_setup_helper_code"
@@ -20,7 +20,7 @@
       "type": "string",
       "description": "How CA should guide the learner (e.g., 'Ask them to try loading the CSV first', 'Encourage exploration of different filtering methods')"
     },
-    "must_check": {
+    "recommended_targets": {
       "type": "array",
       "items": {
         "type": "string"
@@ -63,6 +63,10 @@
       "type": "string",
       "enum": ["core", "scaffolding"],
       "description": "Whether current focus is a core assessed task or scaffolding setup"
+    },
+    "suggest_checkpoint_confirmation": {
+      "type": "boolean",
+      "description": "When true, CA should ask the student if they want to move to the next task"
     }
   }
 }

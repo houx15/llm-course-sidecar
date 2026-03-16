@@ -55,6 +55,29 @@
       },
       "description": "Internal diagnostic notes (not shown to student, not fed to CA by default)"
     },
+    "achievement_log": {
+      "type": "object",
+      "description": "Per-task cumulative record of student's substantive outputs",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["task_id", "accumulated_output", "last_updated_turn"],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Task identifier from task_list.md"
+          },
+          "accumulated_output": {
+            "type": "string",
+            "description": "Cumulative record of student's substantive outputs for this task"
+          },
+          "last_updated_turn": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Turn index when this achievement was last updated"
+          }
+        }
+      }
+    },
     "skipped_tasks": {
       "type": "array",
       "items": {

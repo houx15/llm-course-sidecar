@@ -598,10 +598,10 @@ class ConsultationEngine:
                 guidance_text = enforcement[guidance_start:]
                 updates["guidance_for_ca"] = guidance_text
 
-        # Parse must_check (array)
-        must_check_match = re.search(r"must_check=\['([^']+)'\]", enforcement)
+        # Parse recommended_targets (array)
+        must_check_match = re.search(r"(?:must_check|recommended_targets)=\['([^']+)'\]", enforcement)
         if must_check_match:
-            updates["must_check"] = [must_check_match.group(1)]
+            updates["recommended_targets"] = [must_check_match.group(1)]
 
         return updates
 

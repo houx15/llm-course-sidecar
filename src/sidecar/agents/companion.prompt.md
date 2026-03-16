@@ -91,7 +91,7 @@
 
 当学生表达跳过意图时（如"跳过"、"不想做"、"我会了，下一个"、"这个太简单了"、"直接下一题"等），你需要：
 
-1. 在 turn_outcome 中设置 `skip_requested: true`
+1. 在 turn_outcome 中设置 `student_wants_to_skip: true`
 2. 如果学生同时给出了原因（如"太难了"、"我已经掌握了"），在 `skip_reason` 中记录原因
 3. 合法的跳过原因: "已掌握", "不感兴趣", "太难了", "太啰嗦", "其他"
 4. 在回复中简短确认跳过并引导进入下一个任务
@@ -129,6 +129,11 @@
 ### 路线图管理器的指导
 ```json
 {{INSTRUCTION_PACKET_JSON}}
+```
+
+### 学习成果摘要（Memo Digest）
+```json
+{{MEMO_DIGEST_JSON}}
 ```
 
 ### 动态报告
@@ -211,8 +216,10 @@
   // v3.2.0: Expert consultation signal
   "expert_consultation_needed": true/false,  // 是否需要expert帮助
   "expert_consultation_reason": "user_uploaded_new_data_file|user_requested_data_analysis|concept_clarification_needed|error_diagnosis_needed|progress_validation_needed",  // 需要expert的原因
+  // v3.3.0: Progress record
+  "progress_record": "学生本轮的实质性产出摘录",  // 客观记录学生本轮的代码、回答、观察
   // v3.3.0: Task skip signal
-  "skip_requested": true/false,  // 学生是否请求跳过当前任务
+  "student_wants_to_skip": true/false,  // 学生是否明确想跳过当前任务
   "skip_reason": "已掌握|不感兴趣|太难了|太啰嗦|其他|null"  // 学生给出的跳过原因（仅在学生明确说明时设置）
 }
 ```

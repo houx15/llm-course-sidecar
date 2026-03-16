@@ -175,7 +175,7 @@ def get_default_instruction_packet() -> InstructionPacket:
     return InstructionPacket(
         current_focus="继续当前任务",
         guidance_for_ca="继续引导学习者完成当前任务",
-        must_check=["检查学习者是否理解当前概念"],
+        recommended_targets=["检查学习者是否理解当前概念"],
         nice_check=[],
         instruction_version=1,
         lock_until="checkpoint_reached",
@@ -207,7 +207,8 @@ def get_default_memo_digest() -> MemoDigest:
         student_sentiment="engaged",
         blocker_type="none",
         progress_delta="none",
-        diagnostic_log=[]
+        diagnostic_log=[],
+        achievement_log={}
     )
 
 

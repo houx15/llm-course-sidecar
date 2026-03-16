@@ -799,6 +799,11 @@ class Orchestrator:
         Returns:
             (should_unlock, reason) tuple
         """
+        # v3.3.0: Unlock if student wants to skip current task
+        if hasattr(turn_outcome, 'student_wants_to_skip') and turn_outcome.student_wants_to_skip:
+            logger.info("Unlocking instruction: student wants to skip current task")
+            return True, "student_wants_to_skip"
+
         # v3.2.0: Unlock if CA signals expert consultation needed
         if hasattr(turn_outcome, 'expert_consultation_needed') and turn_outcome.expert_consultation_needed:
             reason = getattr(turn_outcome, 'expert_consultation_reason', 'unspecified')
@@ -1084,6 +1089,9 @@ class Orchestrator:
                     uploaded_files_info["has_new_uploads"] = True
                     uploaded_files_info["new_file_count"] += 1
 
+            # v3.4.1: Load memo_digest for CA access to achievement log
+            memo_digest = self.storage.load_memo_digest(session_id)
+
             # 3. Call Companion Agent for current-turn judgment (with tracking and error recovery)
             logger.info("Calling Companion Agent")
             perf_tracker.start_operation("run_companion", {"phase": "initial"})
@@ -1105,6 +1113,7 @@ class Orchestrator:
                     available_experts_info=available_experts_info,  # v3.2.0: Pass expert info
                     uploaded_files_info=uploaded_files_info_text,  # v3.2.0: Pass uploaded files info
                     recent_code_executions=recent_code_executions_text,  # v3.3.0
+                    memo_digest=memo_digest,  # v3.4.1: Pass achievement log to CA
                 )
                 perf_tracker.end_operation(success=True)
 
@@ -1131,8 +1140,8 @@ class Orchestrator:
                 from .json_utils import get_default_memo_digest
                 previous_memo_digest = get_default_memo_digest()
 
-            # 3.5: Handle skip_requested signal from CA
-            if getattr(turn_outcome, "skip_requested", False):
+            # 3.5: Handle student_wants_to_skip signal from CA
+            if getattr(turn_outcome, "student_wants_to_skip", False):
                 skip_reason_from_ca = getattr(turn_outcome, "skip_reason", None)
                 if state.awaiting_skip_reason and skip_reason_from_ca:
                     # Student provided a reason after being asked
@@ -1158,7 +1167,7 @@ class Orchestrator:
                         state = self.storage.load_state(session_id)
                     except OrchestratorError as e:
                         logger.warning(f"Direct skip failed: {e}")
-            elif state.awaiting_skip_reason and not getattr(turn_outcome, "skip_requested", False):
+            elif state.awaiting_skip_reason and not getattr(turn_outcome, "student_wants_to_skip", False):
                 # Student didn't skip this turn — reset the awaiting flag
                 state.awaiting_skip_reason = False
                 self.storage.save_state(session_id, state)
@@ -1213,6 +1222,7 @@ class Orchestrator:
                         memo_digest=previous_memo_digest,
                         session_state=state,
                         turn_outcome=turn_outcome,
+                        instruction_packet=instruction_packet,  # v3.3.0: Pass current instruction
                         chapter_context=chapter_content.get("chapter_context", ""),
                         task_list=chapter_content.get("task_list", ""),
                         task_completion_principles=chapter_content.get("task_completion_principles", ""),
@@ -1328,6 +1338,7 @@ class Orchestrator:
                             available_experts_info=available_experts_info,
                             uploaded_files_info=uploaded_files_info_text,
                             recent_code_executions=recent_code_executions_text,
+                            memo_digest=memo_digest,  # v3.4.1
                         )
                         turn_outcome = final_turn_outcome
                         perf_tracker.end_operation(success=True)

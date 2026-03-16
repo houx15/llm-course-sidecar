@@ -38,6 +38,11 @@
 ### 动态报告
 {{DYNAMIC_REPORT}}
 
+### 当前指令包（Instruction Packet）
+```json
+{{INSTRUCTION_PACKET_JSON}}
+```
+
 ### Memo摘要
 ```json
 {{MEMO_DIGEST_JSON}}
@@ -165,8 +170,9 @@
 {
   "current_focus": "学习者当前应该关注哪个子任务",
   "guidance_for_ca": "CA应该如何引导学习者（例如：'让他们先尝试加载CSV文件'，'鼓励探索不同的过滤方法'）",
-  "must_check": ["关键检查项1", "关键检查项2"],  // 最多2项
+  "recommended_targets": ["关键检查项1", "关键检查项2"],  // 最多2项
   "nice_check": ["可选检查项"],  // 最多1项
+  "suggest_checkpoint_confirmation": false,  // 当为true时，CA应询问学生是否想进入下一个任务
   "instruction_version": 1,  // 指令包版本号，仅在检查点达成或卡住时递增
   "lock_until": "checkpoint_reached|attempts_exceeded|new_error_type|user_uploads_suitable_dataset_or_uses_example",  // 解锁条件
   "allow_setup_helper_code": false,  // 是否允许脚手架代码
@@ -176,8 +182,9 @@
 ```
 
 **字段说明**：
-- `must_check`: 最多2个关键检查项，CA必须验证的证据
+- `recommended_targets`: 最多2个推荐学习目标（v3.3.0，原`must_check`）
 - `nice_check`: 最多1个可选检查项，时间允许时可以检查
+- `suggest_checkpoint_confirmation`: 当学生看似完成了当前任务但还未明确确认时，设为true让CA询问学生是否想进入下一个任务（v3.4.0）
 - `instruction_version`: 指令包版本号，用于跟踪指令的稳定性
 - `lock_until`: 指令包的解锁条件
   - `checkpoint_reached`: 等待检查点达成
@@ -243,7 +250,7 @@
   "instruction_packet": {
     "current_focus": "...",
     "guidance_for_ca": "...",
-    "must_check": ["检查项1", "检查项2"],
+    "recommended_targets": ["检查项1", "检查项2"],
     "nice_check": ["可选检查项"],
     "instruction_version": 1,
     "lock_until": "checkpoint_reached",
@@ -274,7 +281,7 @@
   "instruction_packet": {
     "current_focus": "等待数据集验证",
     "guidance_for_ca": "告知学习者我们正在检查他们上传的数据集是否符合要求，请稍等片刻",
-    "must_check": [],
+    "recommended_targets": [],
     "nice_check": [],
     "instruction_version": 1,
     "lock_until": "checkpoint_reached",
@@ -335,7 +342,7 @@
 
 **实施方式**：
 - 如果不满足解锁条件，**重新发出相同版本的指令包**
-- 不要扩展 `must_check` 或 `nice_check` 的范围
+- 不要扩展 `recommended_targets` 或 `nice_check` 的范围
 - 不要引入新的概念要求
 
 ### 4. 脚手架任务识别
@@ -367,7 +374,7 @@
 ### 5. 检查项数量限制
 
 **严格限制**：
-- `must_check`: 最多2项
+- `recommended_targets`: 最多2个推荐学习目标
 - `nice_check`: 最多1项
 
 **原则**：
@@ -410,7 +417,7 @@
   "instruction_packet": {
     "current_focus": "加载CSV文件（子任务1）",
     "guidance_for_ca": "引导学习者使用pandas的read_csv函数。如果遇到文件路径问题，帮助他们理解相对路径和绝对路径的区别。",
-    "must_check": ["能成功加载数据", "能展示DataFrame的基本信息"],
+    "recommended_targets": ["能成功加载数据", "能展示DataFrame的基本信息"],
     "nice_check": ["理解CSV文件格式"],
     "instruction_version": 1,
     "lock_until": "checkpoint_reached",
