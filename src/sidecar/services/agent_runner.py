@@ -163,6 +163,47 @@ class AgentRunner:
         result, usage = await self._call_llm_with_retry(prompt, TurnOutcome, max_retries=max_retries)
         return result, usage
 
+    def build_companion_prompt(self, **kwargs) -> str:
+        """Build the CA prompt without calling LLM. Used by streaming orchestrator."""
+        template = self._load_prompt_template("companion")
+        memo_digest = kwargs.get("memo_digest")
+        context = {
+            "CHAPTER_CONTEXT": kwargs.get("chapter_context", ""),
+            "TASK_LIST": kwargs.get("task_list", ""),
+            "TASK_COMPLETION_PRINCIPLES": kwargs.get("task_completion_principles", ""),
+            "INTERACTION_PROTOCOL": kwargs.get("interaction_protocol", ""),
+            "SOCRATIC_VS_DIRECT": kwargs.get("socratic_vs_direct", ""),
+            "SESSION_STATE_JSON": kwargs["session_state"].model_dump_json(indent=2),
+            "INSTRUCTION_PACKET_JSON": kwargs["instruction_packet"].model_dump_json(indent=2),
+            "DYNAMIC_REPORT": kwargs.get("dynamic_report", ""),
+            "MEMORY_LONG_TERM": kwargs.get("memory_long_term", ""),
+            "MEMORY_MID_TERM": kwargs.get("memory_mid_term", ""),
+            "MEMORY_RECENT_TURNS": kwargs.get("memory_recent_turns", ""),
+            "USER_MESSAGE": kwargs.get("user_message", ""),
+            "AVAILABLE_EXPERTS_INFO": kwargs.get("available_experts_info", ""),
+            "UPLOADED_FILES_INFO": kwargs.get("uploaded_files_info", ""),
+            "RECENT_CODE_EXECUTIONS": kwargs.get("recent_code_executions", ""),
+            "EXPERT_OUTPUT_SUMMARY": kwargs.get("expert_output_summary", ""),
+            "MEMO_DIGEST_JSON": memo_digest.model_dump_json(indent=2) if memo_digest else "{}",
+        }
+        return self._inject_context(template, context)
+
+    def parse_companion_response(self, full_response: str) -> Tuple["TurnOutcome", str]:
+        """Parse full LLM response into (turn_outcome, companion_text). Used by streaming orchestrator."""
+        from .json_utils import parse_and_validate, JSONValidationError, get_default_turn_outcome
+
+        companion_response = full_response
+        if "```json" in full_response:
+            companion_response = full_response.split("```json")[0].strip()
+
+        try:
+            turn_outcome = parse_and_validate(full_response, TurnOutcome)
+        except JSONValidationError:
+            turn_outcome = get_default_turn_outcome()
+            logger.warning("Failed to parse turn outcome from streamed response, using default")
+
+        return turn_outcome, companion_response
+
     async def run_companion(
         self,
         user_message: str,

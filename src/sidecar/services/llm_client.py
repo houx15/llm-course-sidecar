@@ -1,7 +1,8 @@
 """Multi-provider LLM client with support for Anthropic, OpenAI, and custom APIs."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Tuple
+from typing import AsyncGenerator, Dict, List, Optional, Tuple
+import json as _json
 import httpx
 from ..config import settings
 
@@ -36,6 +37,22 @@ class LLMClient(ABC):
             Tuple of (generated_text, usage) where usage has input_tokens and output_tokens
         """
         pass
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 4096,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Stream text from LLM, yielding chunks as they arrive.
+
+        Yields:
+            Text chunks (delta content)
+        """
+        # Default: fall back to non-streaming and yield the full response at once
+        text, _ = await self.generate(prompt, system_prompt, max_tokens)
+        yield text
 
 
 class AnthropicClient(LLMClient):
@@ -101,6 +118,45 @@ class AnthropicClient(LLMClient):
         except Exception as e:
             raise LLMError(f"Unexpected error: {e}")
 
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 4096,
+    ) -> AsyncGenerator[str, None]:
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        if system_prompt:
+            payload["system"] = system_prompt
+
+        try:
+            async with httpx.AsyncClient(timeout=240.0) as client:
+                async with client.stream(
+                    "POST", f"{self.base_url}/v1/messages", headers=headers, json=payload
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = _json.loads(line[6:])
+                        if data.get("type") == "content_block_delta":
+                            delta = data.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                yield delta["text"]
+        except httpx.HTTPStatusError as e:
+            raise LLMError(f"HTTP error: {e.response.status_code}")
+        except httpx.RequestError as e:
+            raise LLMError(f"Request error: {e}")
+
 
 class OpenAIClient(LLMClient):
     """OpenAI API client."""
@@ -164,6 +220,47 @@ class OpenAIClient(LLMClient):
             raise LLMError(f"Request error: {e}")
         except Exception as e:
             raise LLMError(f"Unexpected error: {e}")
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 4096,
+    ) -> AsyncGenerator[str, None]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=240.0) as client:
+                async with client.stream(
+                    "POST", f"{self.base_url}/v1/chat/completions", headers=headers, json=payload
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        if line.strip() == "data: [DONE]":
+                            break
+                        data = _json.loads(line[6:])
+                        delta = data.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            yield content
+        except httpx.HTTPStatusError as e:
+            raise LLMError(f"HTTP error: {e.response.status_code}")
+        except httpx.RequestError as e:
+            raise LLMError(f"Request error: {e}")
 
 
 class CustomClient(LLMClient):
@@ -241,6 +338,47 @@ class CustomClient(LLMClient):
             raise
         except Exception as e:
             raise LLMError(f"Unexpected error: {e}")
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 4096,
+    ) -> AsyncGenerator[str, None]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=240.0) as client:
+                async with client.stream(
+                    "POST", f"{self.base_url}/chat/completions", headers=headers, json=payload
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        if line.strip() == "data: [DONE]":
+                            break
+                        data = _json.loads(line[6:])
+                        delta = data.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            yield content
+        except httpx.HTTPStatusError as e:
+            raise LLMError(f"HTTP error: {e.response.status_code}")
+        except httpx.RequestError as e:
+            raise LLMError(f"Request error: {e}")
 
 
 def get_llm_client() -> LLMClient:
