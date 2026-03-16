@@ -737,6 +737,27 @@ class SessionListResponse(BaseModel):
     sessions: list[SessionListItem]
 
 
+class SkipTaskRequest(BaseModel):
+    """Request to skip the current task."""
+
+    reason: Optional[str] = Field(default=None, description="Reason code for skipping")
+    reason_text: Optional[str] = Field(default=None, max_length=200, description="Free-form reason text (required when reason is '其他')")
+    subtask_id: Optional[str] = Field(default=None, description="Specific task to skip; defaults to current task")
+
+
+class SkipTaskResponse(BaseModel):
+    """Response after skipping a task."""
+
+    skipped_task_id: str
+    skipped_task_title: str
+    next_task_id: Optional[str]
+    next_task_focus: Optional[str]
+    needs_reason: bool
+    consecutive_skips: int
+    all_tasks_done: bool
+    subtask_status: Dict[str, Any]
+
+
 class ChapterInfo(BaseModel):
     """Chapter information."""
 
@@ -1452,6 +1473,73 @@ async def end_session(session_id: str):
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="结束会话失败")
+
+
+_VALID_SKIP_REASONS = {"已掌握", "不感兴趣", "太难了", "太啰嗦", "其他"}
+
+
+@app.post("/api/session/{session_id}/skip-task", response_model=SkipTaskResponse)
+async def skip_task(session_id: str, request: SkipTaskRequest):
+    """
+    Skip the current (or specified) task.
+
+    The student may optionally provide a reason. After 2 consecutive skips,
+    a reason is required before the skip is executed.
+    """
+    try:
+        orchestrator = _get_orchestrator(session_id)
+        if not orchestrator.storage.session_exists(session_id):
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        # Validate reason
+        if request.reason is not None and request.reason not in _VALID_SKIP_REASONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"无效的跳过原因，请选择: {', '.join(sorted(_VALID_SKIP_REASONS))}",
+            )
+
+        # Validate reason_text required when reason is '其他'
+        if request.reason == "其他" and not (request.reason_text or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail="选择"其他"时必须填写原因说明（reason_text）",
+            )
+
+        result = await orchestrator.execute_skip(
+            session_id=session_id,
+            subtask_id=request.subtask_id,
+            reason=request.reason,
+            reason_text=request.reason_text,
+        )
+
+        # If the task was already completed/skipped, execute_skip raises OrchestratorError
+        # with "already completed/skipped" — mapped to 409 below.
+
+        skipped_task_id = result.get("skipped_task_id") or ""
+        next_task_id = result.get("next_task_id")
+
+        return SkipTaskResponse(
+            skipped_task_id=skipped_task_id,
+            skipped_task_title=skipped_task_id,  # Use ID as title; UI can resolve display name
+            next_task_id=next_task_id,
+            next_task_focus=next_task_id,
+            needs_reason=result.get("needs_reason", False),
+            consecutive_skips=result.get("consecutive_skips", 0),
+            all_tasks_done=result.get("all_tasks_done", False),
+            subtask_status=result.get("subtask_status", {}),
+        )
+
+    except OrchestratorError as e:
+        err_msg = str(e)
+        if "already" in err_msg.lower() or "已" in err_msg:
+            raise HTTPException(status_code=409, detail=err_msg)
+        logger.error(f"Skip task failed: {e}")
+        raise HTTPException(status_code=500, detail=err_msg)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in skip_task: {e}")
+        raise HTTPException(status_code=500, detail="跳过任务失败")
 
 
 @app.get("/api/courses", response_model=CoursesListResponse)
