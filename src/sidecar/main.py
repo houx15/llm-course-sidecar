@@ -73,6 +73,9 @@ default_main_agents_dir = Path(
     os.getenv("MAIN_AGENTS_DIR", str(project_root / "content" / "agents"))
 ).resolve()
 
+default_templates_dir_env = os.getenv("CURRICULUM_TEMPLATES_DIR", "").strip()
+default_templates_dir = Path(default_templates_dir_env).resolve() if default_templates_dir_env else None
+
 overlay_root = sessions_root / "_chapter_overlays"
 overlay_root.mkdir(parents=True, exist_ok=True)
 
@@ -175,6 +178,7 @@ def _build_orchestrator(
         curriculum_dir=str(curriculum_dir),
         experts_dir=str(experts_dir),
         main_agents_dir=str(main_agents_dir) if main_agents_dir else None,
+        templates_dir=str(default_templates_dir) if default_templates_dir else None,
     )
 
 
@@ -299,25 +303,10 @@ def _find_chapter_dir_in_bundle(
 
 
 def _ensure_overlay_templates(curriculum_root: Path) -> None:
-    fallback_templates = []
-    template_root_env = os.getenv("CURRICULUM_TEMPLATES_DIR", "").strip()
-    if template_root_env and _exists(Path(template_root_env)):
-        fallback_templates.append(Path(template_root_env))
-    if _exists(default_curriculum_dir / "_templates"):
-        fallback_templates.append(default_curriculum_dir / "_templates")
-    if _exists(default_curriculum_dir / "templates"):
-        fallback_templates.append(default_curriculum_dir / "templates")
-    # Built-in fallback: templates shipped with the sidecar package itself
-    _builtin = Path(__file__).parent / "default_templates"
-    if _exists(_builtin):
-        fallback_templates.append(_builtin)
-
-    target = curriculum_root / "templates"
-    if target.exists():
-        return
-    for source in fallback_templates:
-        shutil.copytree(source, target, dirs_exist_ok=True)
-        return
+    # Templates are now resolved directly by the orchestrator via templates_dir
+    # parameter (sourced from CURRICULUM_TEMPLATES_DIR env var). No need to copy
+    # into the overlay. Kept as no-op for backward compatibility.
+    pass
 
 
 def _compute_overlay_fingerprint(

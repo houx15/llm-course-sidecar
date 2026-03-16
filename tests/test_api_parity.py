@@ -165,7 +165,7 @@ def test_resolve_curriculum_dir_uses_chapter_bundle_overlay(monkeypatch, tmp_pat
     assert target_chapter.exists()
     assert (target_chapter / "chapter_context.md").exists()
     assert (target_chapter / "interaction_protocol.md").exists()
-    assert (resolved / "templates" / "dynamic_report_template.md").exists()
+    # Templates are no longer copied into overlay — resolved directly via templates_dir
 
 
 def test_run_user_code_endpoint(monkeypatch):

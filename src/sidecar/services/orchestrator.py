@@ -45,6 +45,7 @@ class Orchestrator:
         curriculum_dir: str = "curriculum",
         experts_dir: str = "experts",
         main_agents_dir: Optional[str] = None,
+        templates_dir: Optional[str] = None,
     ):
         """
         Initialize orchestrator.
@@ -62,6 +63,7 @@ class Orchestrator:
         self.curriculum_dir = Path(curriculum_dir)
         self.experts_dir = Path(experts_dir)
         self.main_agents_dir = Path(main_agents_dir) if main_agents_dir else None
+        self.templates_dir = Path(templates_dir) if templates_dir else None
 
         # v3.0: Initialize consultation engine and report generator
         try:
@@ -550,11 +552,14 @@ class Orchestrator:
         return "\n".join(lines)
 
     def _load_templates(self) -> Dict[str, str]:
-        """Load report templates."""
-        templates_dir = self.curriculum_dir / "templates"
-        fallback_dir = self.curriculum_dir / "_templates"
-        if not templates_dir.exists() and fallback_dir.exists():
-            templates_dir = fallback_dir
+        """Load report templates. Search order: explicit templates_dir, curriculum/templates, curriculum/_templates."""
+        candidates = []
+        if self.templates_dir and self.templates_dir.exists():
+            candidates.append(self.templates_dir)
+        candidates.append(self.curriculum_dir / "templates")
+        candidates.append(self.curriculum_dir / "_templates")
+
+        templates_dir = next((d for d in candidates if d.exists()), candidates[0])
 
         templates = {}
         files = [
