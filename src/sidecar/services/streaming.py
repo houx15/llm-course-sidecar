@@ -24,6 +24,45 @@ def _check_cancelled(cancel_event: Optional[asyncio.Event]) -> None:
         raise TurnCancelled()
 
 
+async def _run_memo_background(
+    session_id: str,
+    current_turn_index: int,
+    user_message: str,
+    ca_response: str,
+    turn_outcome,
+    dynamic_report: str,
+    state,
+    templates: Dict[str, str],
+    storage: Storage,
+    agent_runner: AgentRunner,
+) -> None:
+    """Run Memo Agent in background. Updates report and digest without blocking the user."""
+    try:
+        memo_result, ma_usage = await agent_runner.run_memo(
+            user_message=user_message,
+            companion_response=ca_response,
+            turn_outcome=turn_outcome,
+            current_report=dynamic_report,
+            session_state=state,
+            dynamic_report_template=templates.get("dynamic_report_template", ""),
+            student_error_summary_template=templates.get("student_error_summary_template", ""),
+            final_learning_report_template=templates.get("final_learning_report_template", ""),
+        )
+        storage.save_dynamic_report(session_id, memo_result.updated_report)
+        storage.save_memo_digest(session_id, memo_result.digest)
+
+        if state.turn_index > 0 and (current_turn_index % state.constraints.batch_error_log_every_n_turns == 0):
+            if memo_result.error_entries:
+                storage.append_student_error_summary(session_id, memo_result.error_entries)
+
+        logger.info(
+            f"MA background complete for session {session_id} turn {current_turn_index} "
+            f"(tokens: {ma_usage.get('input_tokens', 0)}+{ma_usage.get('output_tokens', 0)})"
+        )
+    except Exception as e:
+        logger.warning(f"MA background failed for session {session_id}: {e}")
+
+
 async def process_turn_stream(
     session_id: str,
     user_message: str,
@@ -356,34 +395,7 @@ async def process_turn_stream(
 
         yield {"type": "companion_complete"}
 
-        # Check cancellation before running MA (saves us an LLM call)
-        _check_cancelled(cancel_event)
-
-        # STEP 5: Run MA in background (non-blocking for user)
-        memo_result, ma_usage = await agent_runner.run_memo(
-            user_message=user_message,
-            companion_response=ca_response,
-            turn_outcome=turn_outcome,
-            current_report=dynamic_report,
-            session_state=state,
-            dynamic_report_template=templates.get("dynamic_report_template", ""),
-            student_error_summary_template=templates.get("student_error_summary_template", ""),
-            final_learning_report_template=templates.get("final_learning_report_template", ""),
-        )
-        ma_input = ma_usage.get("input_tokens", 0)
-        ma_output = ma_usage.get("output_tokens", 0)
-        yield {
-            "type": "token_usage",
-            "agent": "MA",
-            "turn_index": current_turn_index,
-            "input_tokens": ma_input,
-            "output_tokens": ma_output,
-        }
-        turn_token_usage.setdefault("MA", {"input_tokens": 0, "output_tokens": 0})
-        turn_token_usage["MA"]["input_tokens"] += ma_input
-        turn_token_usage["MA"]["output_tokens"] += ma_output
-
-        # Update state based on unlock and progress
+        # Update state based on unlock and progress (no MA needed for this)
         if should_unlock:
             if turn_outcome.checkpoint_reached:
                 state.attempts_since_last_progress = 0
@@ -392,7 +404,7 @@ async def process_turn_stream(
                 state.attempts_since_last_progress = 0
         else:
             logger.info(f"Keeping instruction locked at version {instruction_packet.instruction_version}")
-            if turn_outcome.checkpoint_reached or memo_result.digest.progress_delta == "evidence_added":
+            if turn_outcome.checkpoint_reached:
                 state.attempts_since_last_progress = 0
                 state.last_progress_turn = current_turn_index
             else:
@@ -401,7 +413,7 @@ async def process_turn_stream(
         state.turn_index = current_turn_index + 1
         storage.save_state(session_id, state)
 
-        # Save turn data (including accumulated token usage)
+        # Save turn data immediately (CA response is ready)
         storage.save_turn(
             session_id=session_id,
             turn_index=current_turn_index,
@@ -411,9 +423,19 @@ async def process_turn_stream(
             token_usage=turn_token_usage if turn_token_usage else None,
         )
 
-        # Save updated report
-        storage.save_dynamic_report(session_id, memo_result.updated_report)
-        storage.save_memo_digest(session_id, memo_result.digest)
+        # STEP 5: Fire-and-forget MA in background — don't block user
+        asyncio.create_task(_run_memo_background(
+            session_id=session_id,
+            current_turn_index=current_turn_index,
+            user_message=user_message,
+            ca_response=ca_response,
+            turn_outcome=turn_outcome,
+            dynamic_report=dynamic_report,
+            state=state,
+            templates=templates,
+            storage=storage,
+            agent_runner=agent_runner,
+        ))
 
     except TurnCancelled:
         logger.info(f"Turn cancelled for session {session_id}, discarding turn {current_turn_index}")
