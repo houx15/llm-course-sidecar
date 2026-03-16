@@ -8,7 +8,7 @@ from datetime import datetime
 
 class SubtaskStatus(BaseModel):
     """Status of a single subtask."""
-    status: Literal["not_started", "in_progress", "completed"]
+    status: Literal["not_started", "in_progress", "completed", "skipped"]
     evidence: List[str] = Field(default_factory=list)
 
 
@@ -17,6 +17,15 @@ class SessionConstraints(BaseModel):
     max_input_length: int = 10000
     batch_error_log_every_n_turns: int = 5
     max_attempts_before_unlock: int = 3
+
+
+class SkipLogEntry(BaseModel):
+    """Record of a single task skip."""
+    subtask_id: str
+    turn_index: int
+    reason: str | None = None
+    reason_text: str | None = None
+    skipped_at: str
 
 
 class SessionState(BaseModel):
@@ -32,6 +41,11 @@ class SessionState(BaseModel):
     current_instruction_version: int = 1
     attempts_since_last_progress: int = 0
     last_progress_turn: int = 0
+    # skip tracking fields
+    current_subtask_id: str | None = None
+    consecutive_skips: int = 0
+    skip_log: List[SkipLogEntry] = Field(default_factory=list)
+    awaiting_skip_reason: bool = False
 
     def update(self, state_update: Dict) -> None:
         """Update session state with new values."""
@@ -116,6 +130,9 @@ class TurnOutcome(BaseModel):
     # v3.2.0: Expert consultation signal from CA
     expert_consultation_needed: bool = False
     expert_consultation_reason: str = ""  # e.g., "user_requested_data_analysis", "concept_clarification_needed", "error_diagnosis_needed"
+    # skip fields
+    skip_requested: bool = False
+    skip_reason: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -136,6 +153,7 @@ class MemoDigest(BaseModel):
     blocker_type: Literal["none", "scaffolding", "core_concept", "core_implementation", "external_resource_needed"]
     progress_delta: Literal["none", "evidence_added", "checkpoint_reached", "regressed"]
     diagnostic_log: List[str] = Field(default_factory=list)
+    skipped_tasks: List[str] = Field(default_factory=list)
 
 
 class MemoryChunk(BaseModel):
