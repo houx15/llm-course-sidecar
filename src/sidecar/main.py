@@ -1520,9 +1520,9 @@ async def skip_task(session_id: str, request: SkipTaskRequest):
 
         return SkipTaskResponse(
             skipped_task_id=skipped_task_id,
-            skipped_task_title=skipped_task_id,  # Use ID as title; UI can resolve display name
+            skipped_task_title=result.get("skipped_task_title") or skipped_task_id,
             next_task_id=next_task_id,
-            next_task_focus=next_task_id,
+            next_task_focus=result.get("next_task_focus") or next_task_id,
             needs_reason=result.get("needs_reason", False),
             consecutive_skips=result.get("consecutive_skips", 0),
             all_tasks_done=result.get("all_tasks_done", False),

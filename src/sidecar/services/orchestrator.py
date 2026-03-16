@@ -717,6 +717,50 @@ class Orchestrator:
                 for s in state.subtask_status.values()
             )
 
+            # Call RMA to generate new InstructionPacket for the next task
+            next_task_focus = next_task_id  # fallback
+            if next_task_id and not all_tasks_done:
+                try:
+                    chapter_content = self._load_chapter_content(state.chapter_id)
+                    dynamic_report = self.storage.load_dynamic_report(session_id) or ""
+                    previous_memo_digest = self.storage.load_memo_digest(session_id)
+                    consultation_guide_text = self._load_consultation_guide_text(state.chapter_id)
+                    available_experts_info = self._load_available_experts_info(state.chapter_id)
+
+                    rma_result, _ = await self.agent_runner.run_roadmap_manager(
+                        dynamic_report=dynamic_report,
+                        memo_digest=previous_memo_digest,
+                        session_state=state,
+                        turn_outcome=None,  # No turn outcome for skip
+                        chapter_context=chapter_content.get("chapter_context", ""),
+                        task_list=chapter_content.get("task_list", ""),
+                        task_completion_principles=chapter_content.get("task_completion_principles", ""),
+                        consultation_guide=consultation_guide_text,
+                        available_experts=available_experts_info,
+                    )
+
+                    if rma_result and rma_result.instruction_packet:
+                        new_instruction = rma_result.instruction_packet
+                        new_instruction.instruction_version = state.current_instruction_version + 1
+                        self.storage.save_instruction_packet(session_id, new_instruction)
+                        state.current_instruction_version = new_instruction.instruction_version
+
+                        # Update current_subtask_id from RMA's focus
+                        current_focus = new_instruction.current_focus or ""
+                        for task_id in state.subtask_status:
+                            if task_id in current_focus and state.subtask_status[task_id].status not in ("completed", "skipped"):
+                                state.current_subtask_id = task_id
+                                break
+
+                        next_task_focus = new_instruction.current_focus or next_task_id
+
+                        # Apply RMA's state update (if any)
+                        if rma_result.state_update:
+                            state.update(rma_result.state_update)
+
+                except Exception as e:
+                    logger.warning(f"RMA call after skip failed: {e}, using task_id as focus")
+
             self.storage.save_state(session_id, state)
 
             logger.info(
@@ -726,7 +770,9 @@ class Orchestrator:
 
             return {
                 "skipped_task_id": target_id,
+                "skipped_task_title": target_id,
                 "next_task_id": next_task_id,
+                "next_task_focus": next_task_focus,
                 "needs_reason": False,
                 "consecutive_skips": state.consecutive_skips,
                 "all_tasks_done": all_tasks_done,
