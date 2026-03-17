@@ -497,10 +497,10 @@ async def process_turn_stream(
             token_usage=turn_token_usage if turn_token_usage else None,
         )
 
-        # STEP 5: Fire-and-forget MA so the user can interact immediately.
-        # The SSE stream closes right after this, sending 'complete'.
-        # The report will be stale for this turn but updates on the next.
-        asyncio.create_task(_run_memo_background(
+        # STEP 5: Run MA after response is streamed.
+        # The user already sees the CA response; the SSE stream stays open
+        # while MA runs so the report is ready before the 'complete' event.
+        await _run_memo_background(
             session_id=session_id,
             current_turn_index=current_turn_index,
             user_message=user_message,
@@ -511,7 +511,7 @@ async def process_turn_stream(
             templates=templates,
             storage=storage,
             agent_runner=agent_runner,
-        ))
+        )
 
     except TurnCancelled:
         logger.info(f"Turn cancelled for session {session_id}, discarding turn {current_turn_index}")
