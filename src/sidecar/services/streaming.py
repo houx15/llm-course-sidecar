@@ -12,9 +12,9 @@ from ..models.schemas import InstructionPacket
 
 logger = logging.getLogger(__name__)
 
-# Fake-streaming parameters
-_FAKE_CHUNK_SIZE = 4  # characters per chunk
-_FAKE_CHUNK_DELAY = 0.015  # seconds between chunks
+# Fake-streaming parameters (1 char at a time, matching previous behavior)
+_FAKE_CHUNK_SIZE = 1  # characters per chunk
+_FAKE_CHUNK_DELAY = 0.02  # seconds between chunks
 
 
 class TurnCancelled(Exception):
