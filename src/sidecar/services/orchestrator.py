@@ -584,8 +584,10 @@ class Orchestrator:
         """
         Parse task list to extract subtask IDs.
 
-        This is a simple parser that looks for task IDs in the format:
+        Supported formats:
         - **task_id**: Task description
+        - **task_id** [类型: core]
+        - **task_id** (any text after **)
 
         Returns:
             Dictionary of subtask_id -> SubtaskStatus
@@ -594,13 +596,19 @@ class Orchestrator:
 
         for line in task_list_content.split("\n"):
             line = line.strip()
-            if line.startswith("- **") and "**:" in line:
-                # Extract task ID
+            if line.startswith("- **") and "**" in line[4:]:
+                # Extract task ID between first pair of **
                 task_id = line.split("**")[1]
-                subtasks[task_id] = SubtaskStatus(
-                    status="not_started",
-                    evidence=[]
-                )
+                if task_id:
+                    subtasks[task_id] = SubtaskStatus(
+                        status="not_started",
+                        evidence=[]
+                    )
+
+        if subtasks:
+            logger.info(f"Parsed {len(subtasks)} subtasks: {list(subtasks.keys())}")
+        else:
+            logger.warning(f"No subtasks parsed from task_list ({len(task_list_content)} chars)")
 
         return subtasks
 
