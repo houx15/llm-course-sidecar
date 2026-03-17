@@ -113,6 +113,14 @@ async def process_turn_stream(
         user_message_length=len(user_message),
     )
 
+    logger.info(
+        f"[DEBUG] turn={state.turn_index} user_msg={user_message[:50]!r} "
+        f"instruction_v={instruction_packet.instruction_version} "
+        f"current_focus={getattr(instruction_packet, 'current_focus', 'N/A')!r} "
+        f"current_subtask={state.current_subtask_id!r} "
+        f"recent_turns_len={len(memory_sections.get('recent_turns', ''))}"
+    )
+
     yield {"type": "start"}
 
     try:
