@@ -716,10 +716,14 @@ class Orchestrator:
             # Update current_subtask_id
             state.current_subtask_id = next_task_id
 
-            # Check if all tasks done
-            all_tasks_done = all(
+            # Check if all tasks done (empty subtask_status → not done)
+            all_tasks_done = bool(state.subtask_status) and all(
                 s.status in ("completed", "skipped")
                 for s in state.subtask_status.values()
+            )
+            logger.info(
+                f"[DEBUG skip] subtask_status={{{', '.join(f'{k}: {v.status}' for k, v in state.subtask_status.items())}}}, "
+                f"all_tasks_done={all_tasks_done}, target={target_id}, next={next_task_id}"
             )
 
             # Call RMA to generate new InstructionPacket for the next task
