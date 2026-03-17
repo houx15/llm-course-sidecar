@@ -240,6 +240,7 @@ class OpenAIClient(LLMClient):
             "messages": messages,
             "max_tokens": max_tokens,
             "stream": True,
+            "thinking": {"type": "disabled"},
         }
         try:
             async with httpx.AsyncClient(timeout=240.0) as client:
@@ -358,6 +359,7 @@ class CustomClient(LLMClient):
             "messages": messages,
             "max_tokens": max_tokens,
             "stream": True,
+            "thinking": {"type": "disabled"},
         }
         try:
             async with httpx.AsyncClient(timeout=240.0) as client:
