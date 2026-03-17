@@ -130,31 +130,75 @@ async def process_turn_stream(
         # Check cancellation before starting expensive LLM calls
         _check_cancelled(cancel_event)
 
-        # STEP 1: Run CA first to judge the current turn
+        # STEP 1: Stream CA response in real-time (always streams, not just on unlock)
+        ca_prompt = agent_runner.build_companion_prompt(
+            user_message=user_message,
+            instruction_packet=instruction_packet,
+            dynamic_report=dynamic_report,
+            session_state=state,
+            chapter_context=chapter_content.get("chapter_context", ""),
+            task_list=chapter_content.get("task_list", ""),
+            task_completion_principles=chapter_content.get("task_completion_principles", ""),
+            interaction_protocol=chapter_content.get("interaction_protocol", ""),
+            socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
+            memory_long_term=memory_sections["long_term"],
+            memory_mid_term=memory_sections["mid_term"],
+            memory_recent_turns=memory_sections["recent_turns"],
+            available_experts_info=available_experts_info,
+            uploaded_files_info=uploaded_files_info_text,
+            recent_code_executions=recent_code_executions_text,
+        )
+
+        yield {"type": "companion_start"}
+
+        step1_full_response = ""
+        step1_sent_pos = 0
+        step1_json_detected = False
+        _JSON_MARKER = "```json"
+        _MARKER_LEN = len(_JSON_MARKER)
+
         try:
-            ca_response, turn_outcome, ca_usage = await agent_runner.run_companion(
-                user_message=user_message,
-                instruction_packet=instruction_packet,
-                dynamic_report=dynamic_report,
-                session_state=state,
-                chapter_context=chapter_content.get("chapter_context", ""),
-                task_list=chapter_content.get("task_list", ""),
-                task_completion_principles=chapter_content.get("task_completion_principles", ""),
-                interaction_protocol=chapter_content.get("interaction_protocol", ""),
-                socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-                memory_long_term=memory_sections["long_term"],
-                memory_mid_term=memory_sections["mid_term"],
-                memory_recent_turns=memory_sections["recent_turns"],
-                available_experts_info=available_experts_info,
-                uploaded_files_info=uploaded_files_info_text,
-                recent_code_executions=recent_code_executions_text,
-            )
+            async for chunk in agent_runner.llm_client.generate_stream(ca_prompt):
+                if cancel_event is not None and cancel_event.is_set():
+                    yield {"type": "companion_complete"}
+                    raise TurnCancelled()
+
+                step1_full_response += chunk
+
+                if step1_json_detected:
+                    continue
+
+                marker_idx = step1_full_response.find(_JSON_MARKER)
+                if marker_idx >= 0:
+                    unsent = step1_full_response[step1_sent_pos:marker_idx]
+                    if unsent:
+                        yield {"type": "companion_chunk", "content": unsent}
+                    step1_json_detected = True
+                else:
+                    safe_end = max(step1_sent_pos, len(step1_full_response) - (_MARKER_LEN - 1))
+                    unsent = step1_full_response[step1_sent_pos:safe_end]
+                    if unsent:
+                        yield {"type": "companion_chunk", "content": unsent}
+                        step1_sent_pos = safe_end
+
+            # Flush remaining text if no JSON block was found
+            if not step1_json_detected and step1_sent_pos < len(step1_full_response):
+                yield {"type": "companion_chunk", "content": step1_full_response[step1_sent_pos:]}
+
         except LLMError as e:
-            logger.error(f"LLM error in CA step 1: {e}")
+            logger.error(f"LLM error in CA step 1 streaming: {e}")
+            yield {"type": "companion_complete"}
             yield {"type": "llm_error", "error": str(e)}
             return
-        ca_input = ca_usage.get("input_tokens", 0)
-        ca_output = ca_usage.get("output_tokens", 0)
+
+        yield {"type": "companion_complete"}
+
+        # Parse turn outcome from the full streamed response
+        turn_outcome, ca_response = agent_runner.parse_companion_response(step1_full_response)
+
+        # Estimate token usage (streaming doesn't return exact counts)
+        ca_input = len(ca_prompt) // 4  # rough estimate
+        ca_output = len(step1_full_response) // 4
         yield {
             "type": "token_usage",
             "agent": "CA",
@@ -346,11 +390,12 @@ async def process_turn_stream(
             if rma_final_result:
                 rma_guidance = f"{rma_final_result.expert_consultation_summary}\n\n{rma_final_result.guidance_for_ca}"
 
-            # STEP 3+4: Real-time stream CA step 2 response to user
+            # STEP 3+4: Stream CA step 2 response (replaces step 1)
+            # Send companion_start again to signal frontend to clear step 1 response
             _check_cancelled(cancel_event)
             yield {"type": "companion_start"}
 
-            ca_prompt = agent_runner.build_companion_prompt(
+            ca2_prompt = agent_runner.build_companion_prompt(
                 user_message=user_message,
                 instruction_packet=new_instruction,
                 dynamic_report=dynamic_report,
@@ -369,39 +414,37 @@ async def process_turn_stream(
                 expert_output_summary=rma_guidance,
             )
 
-            full_response = ""
-            sent_pos = 0
-            json_detected = False
-            _JSON_MARKER = "```json"
-            _MARKER_LEN = len(_JSON_MARKER)
+            step2_full_response = ""
+            step2_sent_pos = 0
+            step2_json_detected = False
 
             try:
-                async for chunk in agent_runner.llm_client.generate_stream(ca_prompt):
+                async for chunk in agent_runner.llm_client.generate_stream(ca2_prompt):
                     if cancel_event is not None and cancel_event.is_set():
                         yield {"type": "companion_complete"}
                         raise TurnCancelled()
 
-                    full_response += chunk
+                    step2_full_response += chunk
 
-                    if json_detected:
+                    if step2_json_detected:
                         continue
 
-                    marker_idx = full_response.find(_JSON_MARKER)
+                    marker_idx = step2_full_response.find(_JSON_MARKER)
                     if marker_idx >= 0:
-                        unsent = full_response[sent_pos:marker_idx]
+                        unsent = step2_full_response[step2_sent_pos:marker_idx]
                         if unsent:
                             yield {"type": "companion_chunk", "content": unsent}
-                        json_detected = True
+                        step2_json_detected = True
                     else:
-                        safe_end = max(sent_pos, len(full_response) - (_MARKER_LEN - 1))
-                        unsent = full_response[sent_pos:safe_end]
+                        safe_end = max(step2_sent_pos, len(step2_full_response) - (_MARKER_LEN - 1))
+                        unsent = step2_full_response[step2_sent_pos:safe_end]
                         if unsent:
                             yield {"type": "companion_chunk", "content": unsent}
-                            sent_pos = safe_end
+                            step2_sent_pos = safe_end
 
                 # Flush remaining text if no JSON block was found
-                if not json_detected and sent_pos < len(full_response):
-                    yield {"type": "companion_chunk", "content": full_response[sent_pos:]}
+                if not step2_json_detected and step2_sent_pos < len(step2_full_response):
+                    yield {"type": "companion_chunk", "content": step2_full_response[step2_sent_pos:]}
 
             except LLMError as e:
                 logger.error(f"LLM error in CA step 2 streaming: {e}")
@@ -411,14 +454,20 @@ async def process_turn_stream(
 
             yield {"type": "companion_complete"}
 
-            turn_outcome, ca_response = agent_runner.parse_companion_response(full_response)
+            # Use step 2 response as the final CA response
+            turn_outcome, ca_response = agent_runner.parse_companion_response(step2_full_response)
 
-        else:
-            # No unlock: send step 1 response instantly (already computed)
-            _check_cancelled(cancel_event)
-            yield {"type": "companion_start"}
-            yield {"type": "companion_chunk", "content": ca_response}
-            yield {"type": "companion_complete"}
+            ca2_output = len(step2_full_response) // 4
+            ca2_input = len(ca2_prompt) // 4
+            yield {
+                "type": "token_usage",
+                "agent": "CA",
+                "turn_index": current_turn_index,
+                "input_tokens": ca2_input,
+                "output_tokens": ca2_output,
+            }
+            turn_token_usage["CA"]["input_tokens"] += ca2_input
+            turn_token_usage["CA"]["output_tokens"] += ca2_output
 
         # Update state based on unlock and progress (no MA needed for this)
         if should_unlock:
