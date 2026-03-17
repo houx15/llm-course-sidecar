@@ -729,11 +729,6 @@ class Orchestrator:
                 s.status in ("completed", "skipped")
                 for s in state.subtask_status.values()
             )
-            logger.info(
-                f"[DEBUG skip] subtask_status={{{', '.join(f'{k}: {v.status}' for k, v in state.subtask_status.items())}}}, "
-                f"all_tasks_done={all_tasks_done}, target={target_id}, next={next_task_id}"
-            )
-
             # Call RMA to generate new InstructionPacket for the next task
             next_task_focus = next_task_id  # fallback
             if next_task_id and not all_tasks_done:
