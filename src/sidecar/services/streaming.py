@@ -2,7 +2,7 @@
 
 import logging
 import asyncio
-from typing import AsyncGenerator, Dict, Optional, Any
+from typing import AsyncGenerator, Dict, Optional, Any, Tuple
 
 from .storage import Storage
 from .memory_manager import MemoryManager
@@ -11,6 +11,10 @@ from .llm_client import LLMError
 from ..models.schemas import InstructionPacket
 
 logger = logging.getLogger(__name__)
+
+# Fake-streaming parameters
+_FAKE_CHUNK_SIZE = 4  # characters per chunk
+_FAKE_CHUNK_DELAY = 0.015  # seconds between chunks
 
 
 class TurnCancelled(Exception):
@@ -24,7 +28,7 @@ def _check_cancelled(cancel_event: Optional[asyncio.Event]) -> None:
         raise TurnCancelled()
 
 
-async def _run_memo_background(
+async def _run_memo_with_usage(
     session_id: str,
     current_turn_index: int,
     user_message: str,
@@ -35,8 +39,8 @@ async def _run_memo_background(
     templates: Dict[str, str],
     storage: Storage,
     agent_runner: AgentRunner,
-) -> None:
-    """Run Memo Agent in background. Updates report and digest without blocking the user."""
+) -> Dict[str, int]:
+    """Run Memo Agent and return token usage. Saves report/digest to storage."""
     try:
         memo_result, ma_usage = await agent_runner.run_memo(
             user_message=user_message,
@@ -56,11 +60,13 @@ async def _run_memo_background(
                 storage.append_student_error_summary(session_id, memo_result.error_entries)
 
         logger.info(
-            f"MA background complete for session {session_id} turn {current_turn_index} "
+            f"MA complete for session {session_id} turn {current_turn_index} "
             f"(tokens: {ma_usage.get('input_tokens', 0)}+{ma_usage.get('output_tokens', 0)})"
         )
+        return ma_usage
     except Exception as e:
-        logger.warning(f"MA background failed for session {session_id}: {e}")
+        logger.warning(f"MA failed for session {session_id}: {e}")
+        return {"input_tokens": 0, "output_tokens": 0}
 
 
 async def process_turn_stream(
@@ -80,14 +86,13 @@ async def process_turn_stream(
     cancel_event: Optional[asyncio.Event] = None,
 ) -> AsyncGenerator[Dict, None]:
     """
-    Process a turn with streaming output.
+    Process a turn with fake-streamed output.
 
     Execution flow:
-    1. CA runs first to judge the current turn
-    2. If unlock conditions met, run RMA (and expert consultation if requested)
-    3. CA generates response after any RMA updates
-    4. Stream CA response to user immediately
-    5. MA runs in background to update report
+    1. CA runs (non-streaming, exact token counts)
+    2. Check unlock → if yes, run RMA (+ expert), then CA step 2
+    3. Start MA concurrently, fake-stream CA response to user
+    4. After fake-stream, await MA, emit MA token usage
 
     Yields events:
     - {'type': 'start'}
@@ -95,8 +100,9 @@ async def process_turn_stream(
     - {'type': 'consultation_complete', 'expert_id': '...', 'consultation_id': '...'}
     - {'type': 'consultation_error', 'expert_id': '...', 'error': '...'}
     - {'type': 'companion_start'}
-    - {'type': 'companion_chunk', 'content': '字'}
+    - {'type': 'companion_chunk', 'content': '...'}
     - {'type': 'companion_complete'}
+    - {'type': 'token_usage', 'agent': '...', ...}
     """
     # Load session state
     state = storage.load_state(session_id)
@@ -130,86 +136,37 @@ async def process_turn_stream(
         # Check cancellation before starting expensive LLM calls
         _check_cancelled(cancel_event)
 
-        # STEP 1: Stream CA response in real-time (always streams, not just on unlock)
-        ca_prompt = agent_runner.build_companion_prompt(
-            user_message=user_message,
-            instruction_packet=instruction_packet,
-            dynamic_report=dynamic_report,
-            session_state=state,
-            chapter_context=chapter_content.get("chapter_context", ""),
-            task_list=chapter_content.get("task_list", ""),
-            task_completion_principles=chapter_content.get("task_completion_principles", ""),
-            interaction_protocol=chapter_content.get("interaction_protocol", ""),
-            socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-            memory_long_term=memory_sections["long_term"],
-            memory_mid_term=memory_sections["mid_term"],
-            memory_recent_turns=memory_sections["recent_turns"],
-            available_experts_info=available_experts_info,
-            uploaded_files_info=uploaded_files_info_text,
-            recent_code_executions=recent_code_executions_text,
-        )
-
-        yield {"type": "companion_start"}
-
-        step1_full_response = ""
-        step1_sent_pos = 0
-        step1_json_detected = False
-        _JSON_MARKER = "```json"
-        _MARKER_LEN = len(_JSON_MARKER)
-
+        # ── STEP 1: Run CA (non-streaming → exact token counts) ──────────
         try:
-            async for chunk in agent_runner.llm_client.generate_stream(ca_prompt):
-                if cancel_event is not None and cancel_event.is_set():
-                    yield {"type": "companion_complete"}
-                    raise TurnCancelled()
-
-                step1_full_response += chunk
-
-                if step1_json_detected:
-                    continue
-
-                marker_idx = step1_full_response.find(_JSON_MARKER)
-                if marker_idx >= 0:
-                    unsent = step1_full_response[step1_sent_pos:marker_idx]
-                    if unsent:
-                        yield {"type": "companion_chunk", "content": unsent}
-                    step1_json_detected = True
-                else:
-                    safe_end = max(step1_sent_pos, len(step1_full_response) - (_MARKER_LEN - 1))
-                    unsent = step1_full_response[step1_sent_pos:safe_end]
-                    if unsent:
-                        yield {"type": "companion_chunk", "content": unsent}
-                        step1_sent_pos = safe_end
-
-            # Flush remaining text if no JSON block was found
-            if not step1_json_detected and step1_sent_pos < len(step1_full_response):
-                yield {"type": "companion_chunk", "content": step1_full_response[step1_sent_pos:]}
-
+            ca_response, turn_outcome, ca_usage = await agent_runner.run_companion(
+                user_message=user_message,
+                instruction_packet=instruction_packet,
+                dynamic_report=dynamic_report,
+                session_state=state,
+                chapter_context=chapter_content.get("chapter_context", ""),
+                task_list=chapter_content.get("task_list", ""),
+                task_completion_principles=chapter_content.get("task_completion_principles", ""),
+                interaction_protocol=chapter_content.get("interaction_protocol", ""),
+                socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
+                memory_long_term=memory_sections["long_term"],
+                memory_mid_term=memory_sections["mid_term"],
+                memory_recent_turns=memory_sections["recent_turns"],
+                available_experts_info=available_experts_info,
+                uploaded_files_info=uploaded_files_info_text,
+                recent_code_executions=recent_code_executions_text,
+            )
         except LLMError as e:
-            logger.error(f"LLM error in CA step 1 streaming: {e}")
-            yield {"type": "companion_complete"}
+            logger.error(f"LLM error in CA step 1: {e}")
             yield {"type": "llm_error", "error": str(e)}
             return
 
-        yield {"type": "companion_complete"}
-
-        # Parse turn outcome from the full streamed response
-        turn_outcome, ca_response = agent_runner.parse_companion_response(step1_full_response)
-
-        # Estimate token usage (streaming doesn't return exact counts)
-        ca_input = len(ca_prompt) // 4  # rough estimate
-        ca_output = len(step1_full_response) // 4
-        yield {
-            "type": "token_usage",
-            "agent": "CA",
-            "turn_index": current_turn_index,
-            "input_tokens": ca_input,
-            "output_tokens": ca_output,
-        }
+        ca_input = ca_usage.get("input_tokens", 0)
+        ca_output = ca_usage.get("output_tokens", 0)
         turn_token_usage.setdefault("CA", {"input_tokens": 0, "output_tokens": 0})
         turn_token_usage["CA"]["input_tokens"] += ca_input
         turn_token_usage["CA"]["output_tokens"] += ca_output
 
+        # ── STEP 2: Check unlock ─────────────────────────────────────────
         should_unlock, unlock_reason = _should_unlock_instruction(
             state=state,
             turn_outcome=turn_outcome,
@@ -245,10 +202,9 @@ async def process_turn_stream(
         rma_final_result = None
         new_instruction = instruction_packet
 
-        # Check cancellation before RMA (expensive multi-agent step)
         _check_cancelled(cancel_event)
 
-        # STEP 2: Run RMA (and expert) only if current-turn judgment unlocks
+        # ── STEP 3: Run RMA (and expert) only if unlock ──────────────────
         if should_unlock:
             rma_result, rma_usage = await agent_runner.run_roadmap_manager(
                 dynamic_report=dynamic_report,
@@ -390,86 +346,47 @@ async def process_turn_stream(
             if rma_final_result:
                 rma_guidance = f"{rma_final_result.expert_consultation_summary}\n\n{rma_final_result.guidance_for_ca}"
 
-            # STEP 3+4: Stream CA step 2 response (replaces step 1)
-            # Send companion_start again to signal frontend to clear step 1 response
+            # Run CA step 2 with updated instruction (non-streaming)
             _check_cancelled(cancel_event)
-            yield {"type": "companion_start"}
-
-            ca2_prompt = agent_runner.build_companion_prompt(
-                user_message=user_message,
-                instruction_packet=new_instruction,
-                dynamic_report=dynamic_report,
-                session_state=state,
-                chapter_context=chapter_content.get("chapter_context", ""),
-                task_list=chapter_content.get("task_list", ""),
-                task_completion_principles=chapter_content.get("task_completion_principles", ""),
-                interaction_protocol=chapter_content.get("interaction_protocol", ""),
-                socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
-                memory_long_term=memory_sections["long_term"],
-                memory_mid_term=memory_sections["mid_term"],
-                memory_recent_turns=memory_sections["recent_turns"],
-                available_experts_info=available_experts_info,
-                uploaded_files_info=uploaded_files_info_text,
-                recent_code_executions=recent_code_executions_text,
-                expert_output_summary=rma_guidance,
-            )
-
-            step2_full_response = ""
-            step2_sent_pos = 0
-            step2_json_detected = False
-
             try:
-                async for chunk in agent_runner.llm_client.generate_stream(ca2_prompt):
-                    if cancel_event is not None and cancel_event.is_set():
-                        yield {"type": "companion_complete"}
-                        raise TurnCancelled()
-
-                    step2_full_response += chunk
-
-                    if step2_json_detected:
-                        continue
-
-                    marker_idx = step2_full_response.find(_JSON_MARKER)
-                    if marker_idx >= 0:
-                        unsent = step2_full_response[step2_sent_pos:marker_idx]
-                        if unsent:
-                            yield {"type": "companion_chunk", "content": unsent}
-                        step2_json_detected = True
-                    else:
-                        safe_end = max(step2_sent_pos, len(step2_full_response) - (_MARKER_LEN - 1))
-                        unsent = step2_full_response[step2_sent_pos:safe_end]
-                        if unsent:
-                            yield {"type": "companion_chunk", "content": unsent}
-                            step2_sent_pos = safe_end
-
-                # Flush remaining text if no JSON block was found
-                if not step2_json_detected and step2_sent_pos < len(step2_full_response):
-                    yield {"type": "companion_chunk", "content": step2_full_response[step2_sent_pos:]}
-
+                ca_response, turn_outcome, ca2_usage = await agent_runner.run_companion(
+                    user_message=user_message,
+                    instruction_packet=new_instruction,
+                    dynamic_report=dynamic_report,
+                    session_state=state,
+                    chapter_context=chapter_content.get("chapter_context", ""),
+                    task_list=chapter_content.get("task_list", ""),
+                    task_completion_principles=chapter_content.get("task_completion_principles", ""),
+                    interaction_protocol=chapter_content.get("interaction_protocol", ""),
+                    socratic_vs_direct=chapter_content.get("socratic_vs_direct", ""),
+                    memory_long_term=memory_sections["long_term"],
+                    memory_mid_term=memory_sections["mid_term"],
+                    memory_recent_turns=memory_sections["recent_turns"],
+                    available_experts_info=available_experts_info,
+                    uploaded_files_info=uploaded_files_info_text,
+                    recent_code_executions=recent_code_executions_text,
+                    expert_output_summary=rma_guidance,
+                )
             except LLMError as e:
-                logger.error(f"LLM error in CA step 2 streaming: {e}")
-                yield {"type": "companion_complete"}
+                logger.error(f"LLM error in CA step 2: {e}")
                 yield {"type": "llm_error", "error": str(e)}
                 return
 
-            yield {"type": "companion_complete"}
-
-            # Use step 2 response as the final CA response
-            turn_outcome, ca_response = agent_runner.parse_companion_response(step2_full_response)
-
-            ca2_output = len(step2_full_response) // 4
-            ca2_input = len(ca2_prompt) // 4
-            yield {
-                "type": "token_usage",
-                "agent": "CA",
-                "turn_index": current_turn_index,
-                "input_tokens": ca2_input,
-                "output_tokens": ca2_output,
-            }
+            ca2_input = ca2_usage.get("input_tokens", 0)
+            ca2_output = ca2_usage.get("output_tokens", 0)
             turn_token_usage["CA"]["input_tokens"] += ca2_input
             turn_token_usage["CA"]["output_tokens"] += ca2_output
 
-        # Update state based on unlock and progress (no MA needed for this)
+        # ── STEP 4: Emit CA token usage, then fake-stream + MA in parallel ─
+        yield {
+            "type": "token_usage",
+            "agent": "CA",
+            "turn_index": current_turn_index,
+            "input_tokens": turn_token_usage["CA"]["input_tokens"],
+            "output_tokens": turn_token_usage["CA"]["output_tokens"],
+        }
+
+        # Update state
         if should_unlock:
             if turn_outcome.checkpoint_reached:
                 state.attempts_since_last_progress = 0
@@ -487,7 +404,7 @@ async def process_turn_stream(
         state.turn_index = current_turn_index + 1
         storage.save_state(session_id, state)
 
-        # Save turn data immediately (CA response is ready)
+        # Save turn data
         storage.save_turn(
             session_id=session_id,
             turn_index=current_turn_index,
@@ -497,10 +414,8 @@ async def process_turn_stream(
             token_usage=turn_token_usage if turn_token_usage else None,
         )
 
-        # STEP 5: Run MA after response is streamed.
-        # The user already sees the CA response; the SSE stream stays open
-        # while MA runs so the report is ready before the 'complete' event.
-        await _run_memo_background(
+        # ── Start MA concurrently, then fake-stream CA response ──────────
+        ma_task = asyncio.create_task(_run_memo_with_usage(
             session_id=session_id,
             current_turn_index=current_turn_index,
             user_message=user_message,
@@ -511,7 +426,32 @@ async def process_turn_stream(
             templates=templates,
             storage=storage,
             agent_runner=agent_runner,
-        )
+        ))
+
+        # Fake-stream the CA response to the user
+        yield {"type": "companion_start"}
+        for i in range(0, len(ca_response), _FAKE_CHUNK_SIZE):
+            if cancel_event is not None and cancel_event.is_set():
+                ma_task.cancel()
+                yield {"type": "companion_complete"}
+                raise TurnCancelled()
+            yield {"type": "companion_chunk", "content": ca_response[i:i + _FAKE_CHUNK_SIZE]}
+            await asyncio.sleep(_FAKE_CHUNK_DELAY)
+        yield {"type": "companion_complete"}
+
+        # ── Await MA, emit its token usage ───────────────────────────────
+        ma_usage = await ma_task
+        ma_input = ma_usage.get("input_tokens", 0)
+        ma_output = ma_usage.get("output_tokens", 0)
+        if ma_input > 0 or ma_output > 0:
+            yield {
+                "type": "token_usage",
+                "agent": "MA",
+                "turn_index": current_turn_index,
+                "input_tokens": ma_input,
+                "output_tokens": ma_output,
+            }
+            turn_token_usage["MA"] = {"input_tokens": ma_input, "output_tokens": ma_output}
 
     except TurnCancelled:
         logger.info(f"Turn cancelled for session {session_id}, discarding turn {current_turn_index}")
